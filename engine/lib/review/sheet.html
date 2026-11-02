@@ -1,0 +1,50 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Voice Review</title>
+<style>
+@font-face{font-family:Vazirmatn;src:url(/font) format("woff2")}
+:root{--bg:#F5F8FB;--card:#fff;--ink:#0D1424;--mute:#566A8C;--line:#D8E0EC;--mark:#D4FF3A;--on:#EEF9C8;--warn:#8A4B08}
+@media (prefers-color-scheme:dark){:root{--bg:#10151F;--card:#1A2230;--ink:#EDF1F7;--mute:#9AA9C2;--line:#303B4E;--on:#2E3A1A;--warn:#F0B56A}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif}
+.top{position:sticky;top:0;z-index:2;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 16px;display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap}
+video{width:min(340px,100%);border-radius:8px;background:#000}.side{flex:1;min-width:240px}
+h1{font-size:18px;margin:0 0 4px}.side p{margin:0;color:var(--mute)}.todo{margin-top:6px!important;color:var(--ink)!important;font-weight:600}
+main{max-width:920px;margin:0 auto;padding:8px 16px 64px}
+.scene{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:14px}.scene h2{font-size:14px;margin:0 0 8px;color:var(--mute)}
+label{display:block;font-size:13px;color:var(--mute);margin:8px 0 2px}
+textarea{width:100%;font:18px/1.8 Vazirmatn,system-ui,sans-serif;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);resize:vertical}
+button{font:inherit;padding:6px 12px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);cursor:pointer}
+button.primary{background:var(--mark);color:#0D1424;border-color:transparent;font-weight:600}button:disabled{opacity:.55;cursor:wait}
+.bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}audio{height:34px;max-width:100%}
+.take{display:flex;gap:8px;align-items:center;flex-wrap:wrap;border-top:1px solid var(--line);padding:8px 0 0;margin-top:8px}.take .t{flex:1 1 100%;font:15px/1.7 Vazirmatn,system-ui,sans-serif;color:var(--mute)}
+.msg{color:var(--mute);font-size:13px}.msg.warn{color:var(--warn)}
+details{margin-top:8px}summary{cursor:pointer;color:var(--mute);font-size:13px}.row{display:flex;gap:8px;align-items:center;padding:3px 0}.row.on{background:var(--on);border-radius:6px}.row span{font:15px/1.7 Vazirmatn,system-ui,sans-serif;flex:1}
+</style></head><body>
+<div class="top"><video id="v" controls preload="metadata" hidden></video>
+<div class="side"><h1 id="title">Voice review</h1><p>Edit what the voice reads, press Voice, and listen. Add vowel marks or respell a word until it sounds right, then keep that take. The take you keep is the audio that ships.</p><p class="todo" id="todo" role="status"></p></div></div>
+<main id="m"></main>
+<script>
+const TOKEN="__TOKEN__",m=document.getElementById("m"),v=document.getElementById("v");let dir="ltr";
+const fmt=t=>Math.floor(t/60)+":"+String(Math.floor(t%60)).padStart(2,"0");
+const el=(tag,props={},...kids)=>{const e=Object.assign(document.createElement(tag),props);e.append(...kids);return e};
+async function post(path,body){const r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json","X-Token":TOKEN},body:JSON.stringify(body)});const d=await r.json().catch(()=>({error:"The server did not answer."}));if(!r.ok)throw new Error(d.error||"That did not work.");return d}
+function todo(c){document.getElementById("todo").textContent=c.length?"To re-record: scene "+c.join(", ")+". Tell Claude when you are done.":""}
+function player(src,at){const a=el("audio",{controls:true,preload:"none",src});if(at!==undefined){a.preload="auto";a.addEventListener("loadedmetadata",()=>{a.currentTime=at;a.play().catch(()=>{})},{once:true})}return a}
+function takeRow(s,t,box,sub,msg,auto){
+ const keep=el("button",{textContent:"Keep this take"});
+ keep.onclick=async()=>{keep.disabled=true;msg.className="msg";msg.textContent="Checking the take with speech-to-text…";
+  try{const r=await post("/api/keep",{scene:s.n,take:t.take,subtitle:sub.value});todo(r.changed);
+   msg.className=r.missing.length?"msg warn":"msg";msg.textContent=(r.missing.length?"Kept, but not heard: "+r.missing.join("، ")+". ":"Kept. ")+"Speech-to-text match "+r.ratio+". It cannot judge vowels, so your ear decides."}
+  catch(e){msg.className="msg warn";msg.textContent=e.message}keep.disabled=false};
+ return el("div",{className:"take"},el("div",{className:"t",dir,textContent:t.voice}),player("/take/"+s.n+"/"+t.take,auto?t.start_at:undefined),keep,el("span",{className:"msg",textContent:"Try "+t.take+" · "+t.chars+" characters"}))}
+function card(s){
+ const box=el("textarea",{rows:4,dir,value:s.voice,id:"voice-"+s.n}),sub=el("textarea",{rows:3,dir,value:s.subtitle,id:"sub-"+s.n}),msg=el("div",{className:"msg",role:"status"}),list=el("div"),go=el("button",{className:"primary",textContent:"Voice"});
+ go.onclick=async()=>{go.disabled=true;msg.className="msg";msg.textContent="Voicing the whole scene…";
+  try{const t=await post("/api/voice",{scene:s.n,voice:box.value});list.prepend(takeRow(s,t,box,sub,msg,true));msg.textContent="Playing from the sentence you changed."}
+  catch(e){msg.className="msg warn";msg.textContent=e.message}go.disabled=false};
+ for(const t of [...s.takes].reverse())list.append(takeRow(s,t,box,sub,msg,false));
+ const c=el("section",{className:"scene"},el("h2",{textContent:"Scene "+s.n}),el("label",{htmlFor:box.id,textContent:"The voice reads (vowel marks are fine)"}),box,el("label",{htmlFor:sub.id,textContent:"The subtitle shows (keep «labels» exactly as on screen)"}),sub);
+ c.append(el("div",{className:"bar"},go,...(s.audio?[el("span",{className:"msg",textContent:"Current:"}),player(s.audio)]:[]))),c.append(msg,list);
+ if(s.rows.length){const d=el("details",{},el("summary",{textContent:"Jump to this scene in the video"}));for(const r of s.rows){const b=el("button",{textContent:fmt(r.t0)});b.onclick=()=>{v.currentTime=r.t0;v.play().catch(()=>{})};const w=el("div",{className:"row"},b,el("span",{dir,textContent:r.text}));w.dataset.t0=r.t0;w.dataset.t1=r.t1;d.append(w)}c.append(d)}
+ return c}
+fetch("/api/state").then(r=>r.json()).then(S=>{dir=S.dir;document.title=S.name+" review";document.getElementById("title").textContent=S.name;todo(S.changed);if(S.video){v.src="/video";v.hidden=false}for(const s of S.scenes)m.append(card(s))});
+v.ontimeupdate=()=>{for(const w of document.querySelectorAll(".row"))w.classList.toggle("on",v.currentTime>=+w.dataset.t0&&v.currentTime<+w.dataset.t1)};
+</script></body></html>

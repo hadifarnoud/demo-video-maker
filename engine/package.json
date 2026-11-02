@@ -1,0 +1,16 @@
+{
+  "name": "praxabase-demo-videos",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Scripted screen recording + AI voice-over + composited edit for Praxabase product demos",
+  "scripts": {
+    "record": "playwright test"
+  },
+  "devDependencies": {
+    "@fontsource/atkinson-hyperlegible-next": "5.3.0",
+    "@fontsource/bricolage-grotesque": "5.3.0",
+    "@fontsource/jetbrains-mono": "5.3.0",
+    "@fontsource/vazirmatn": "5.3.0",
+    "@playwright/test": "1.59.1"
+  }
+}

@@ -1,0 +1,510 @@
+// Scene helper for scripted product-demo recordings (see ../../README.md).
+//
+//   import { scene } from '../lib/record/demo';
+//   scene(1, 'Hero', async (s) => {
+//     await s.go('/');
+//     await s.look('h1', { on: 'Let your experts talk' });
+//     await s.hover(s.page.getByRole('link', { name: 'Request a pilot slot' }).first(), { on: '«Request a pilot slot»' });
+//     await s.finish();
+//   });
+//
+// Every action is anchored to a phrase of the scene's narration line (cue). Cue time =
+// voiceAt + that phrase's char start time from audio/scene-NN.json. Clip time 0 = first
+// screencast frame; cuts (cutStart/cutEnd) are removed from clip time.
+import { test, type Locator, type Page, type CDPSession } from '@playwright/test';
+import { execFileSync, execSync } from 'node:child_process';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const ROOT = path.resolve(__dirname, '../..');
+const VIDEO = process.env.VIDEO ?? '';
+const VDIR = path.join(ROOT, VIDEO);
+const VIEW = { w: 1280, h: 720 };
+const FRAME = { w: 2560, h: 1440 };
+const LATE_LIMIT = 0.35; // s; a later landing than this fails the quality gate
+const HOVER_DWELL = 0.06; // pointer settles on the target this long before the cue
+
+export type Cue = { on?: string; nth?: number; at?: 'start' | 'end' | number };
+export type Box = { x: number; y: number; width: number; height: number };
+type Target = string | Locator | Box;
+type Ev = { t: number; kind: string; box?: Box; label?: string; hint?: string; text?: string; wide?: boolean; hold?: number; cue?: string };
+
+type VoiceLog = { sig?: string; text: string; starts: number[]; ends: number[]; duration: number; line: string };
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const readJson = (p: string) => JSON.parse(fs.readFileSync(p, 'utf8'));
+const norm = (s: string) => s.replace(/[\W_]+/gu, '').toLowerCase();
+
+function videoCfg(): any {
+  return readJson(path.join(VDIR, 'video.json'));
+}
+
+/** JPEG width/height from the SOF marker. */
+function jpegSize(buf: Buffer): [number, number] {
+  let i = 2;
+  while (i < buf.length) {
+    if (buf[i] !== 0xff) { i++; continue; }
+    const m = buf[i + 1];
+    if (m >= 0xc0 && m <= 0xcf && m !== 0xc4 && m !== 0xc8 && m !== 0xcc) return [buf.readUInt16BE(i + 7), buf.readUInt16BE(i + 5)];
+    i += 2 + buf.readUInt16BE(i + 2);
+  }
+  throw new Error('no JPEG SOF');
+}
+
+/** Phrase lookup in the spoken text; « » are ignored on both sides. -> [firstCharIdx, lastCharIdx] in the original text. */
+function findPhrase(text: string, phrase: string, nth = 0): [number, number] | null {
+  const map: number[] = [];
+  let plain = '';
+  [...text].forEach((c, i) => { if (c !== '«' && c !== '»') { plain += c; map.push(i); } });
+  const want = phrase.replace(/[«»]/g, '').toLowerCase();
+  const hay = plain.toLowerCase();
+  let from = 0, idx = -1;
+  for (let k = 0; k <= nth; k++) {
+    idx = hay.indexOf(want, from);
+    if (idx < 0) return null;
+    from = idx + 1;
+  }
+  return [map[idx], map[idx + want.length - 1]];
+}
+
+/** Runs in the page: is an element (the scope root included) whose whole text matches visible in the viewport? Self-contained. */
+function labelFind(arg: { root: Element | null; src: string }): boolean {
+  const re = new RegExp(arg.src);
+  const base: Element = arg.root ?? document.body;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const cand = [base, ...Array.from(base.querySelectorAll('*'))];
+  return cand.some((e) => {
+    const r = e.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0 || r.bottom < 0 || r.top > vh || r.right < 0 || r.left > vw) return false;
+    const cs = getComputedStyle(e);
+    if (cs.visibility === 'hidden' || cs.display === 'none') return false;
+    const own = Array.from(e.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent ?? '').join(' '); // "Only holder<bdi>Name</bdi>"
+    const norm = (x: string) => x.replace(/\s+/g, ' ').trim();
+    return re.test(norm(e.textContent ?? '')) || re.test(norm(own));
+  });
+}
+
+export class Scene {
+  readonly page: Page;
+  readonly n: number;
+  private cdp!: CDPSession;
+  private voice: VoiceLog | null = null;
+  private voiceAt: number;
+  private fonts: string[];
+  private frames: { ts: number; file: string }[] = [];
+  private framesDir: string;
+  private t0 = 0; // performance.now() at the first frame
+  private recording = false;
+  private cutAccum = 0;
+  private cutOpen: number | null = null; // wall seconds since t0
+  private cuts: [number, number][] = [];
+  private events: Ev[] = [];
+  private pathLog: [number, number, number][] = [];
+  private presses: [number, number, number][] = [];
+  private late: { kind: string; cue: string; by: number }[] = [];
+  private checked = new Set<string>();
+  private preflightLog: { when: string; ok: boolean; problems: string[] }[] = [];
+  private pointer = { x: 1040, y: 640 };
+  private side = 1;
+  private done = false;
+  private firstFrame!: Promise<void>;
+  private gotFirst!: () => void;
+
+  constructor(page: Page, n: number) {
+    this.page = page;
+    this.n = n;
+    const cfg = videoCfg();
+    this.voiceAt = cfg.pacing?.voice_at ?? 0.5;
+    this.fonts = cfg.fonts ?? [];
+    this.framesDir = path.join(VDIR, 'work', `frames-${String(n).padStart(2, '0')}`);
+    const vp = path.join(VDIR, 'audio', `scene-${String(n).padStart(2, '0')}.json`);
+    if (fs.existsSync(vp)) this.voice = readJson(vp);
+  }
+
+  async init() {
+    fs.rmSync(this.framesDir, { recursive: true, force: true });
+    fs.mkdirSync(this.framesDir, { recursive: true });
+    fs.mkdirSync(path.join(VDIR, 'clips'), { recursive: true });
+    const calm = videoCfg().calm_css ? String(videoCfg().calm_css) : '';
+    // invisible 2 px element that keeps repainting, so the screencast stays ~30 fps on a still page
+    await this.page.addInitScript((css: string) => {
+      const add = () => {
+        if (document.getElementById('__repaint')) return;
+        const st = document.createElement('style');
+        st.textContent =
+          '@keyframes __rp{from{background-color:#fefefe}to{background-color:#ffffff}}' +
+          '#__repaint{position:fixed;right:0;bottom:0;width:2px;height:2px;pointer-events:none;z-index:2147483647;animation:__rp 33ms steps(1) infinite alternate}' + css;
+        document.documentElement.appendChild(st);
+        const d = document.createElement('div');
+        d.id = '__repaint';
+        document.documentElement.appendChild(d);
+      };
+      if (document.documentElement) add(); else document.addEventListener('DOMContentLoaded', add);
+    }, calm);
+    this.firstFrame = new Promise((r) => (this.gotFirst = r));
+    await this.page.mouse.move(this.pointer.x, this.pointer.y);
+  }
+
+  // ---- clock -------------------------------------------------------------
+  /** Clip time in seconds (cuts removed). */
+  now(): number {
+    const wall = (performance.now() - this.t0) / 1000;
+    return this.cutOpen !== null ? this.cutOpen - this.cutAccum : wall - this.cutAccum;
+  }
+  private async until(t: number) {
+    for (;;) {
+      if (this.cutOpen !== null) throw new Error('cannot wait on the clip clock inside cutStart/cutEnd');
+      const d = t - this.now();
+      if (d <= 0.002) return;
+      await sleep(Math.min(d * 1000, 50));
+    }
+  }
+
+  // ---- cues --------------------------------------------------------------
+  /** Cue time in clip seconds, or null when no cue given. */
+  private cueTime(cue?: Cue): number | null {
+    if (!cue?.on) return null;
+    if (!this.voice) throw new Error(`scene ${this.n}: cue "${cue.on}" but no audio/scene-NN.json; voice the line first (voice.py)`);
+    const hit = findPhrase(this.voice.text, cue.on, cue.nth ?? 0);
+    if (!hit) throw new Error(`scene ${this.n}: cue phrase "${cue.on}" not found in "${this.voice.text}"`);
+    const [a, b] = hit;
+    const s0 = this.voice.starts[a], e1 = this.voice.ends[b];
+    const at = cue.at ?? 'start';
+    const f = at === 'start' ? 0 : at === 'end' ? 1 : at;
+    const label = cue.on.match(/«([^»]+)»/);
+    if (label) this.pendingLabels.push(label[1]);
+    return this.voiceAt + s0 + f * (e1 - s0);
+  }
+  private pendingLabels: string[] = [];
+  private async autoLabels() {
+    const l = this.pendingLabels.splice(0);
+    for (const t of l) await this.label(t);
+  }
+  private lateCheck(kind: string, cue: number | null, landed: number, desc: string) {
+    if (cue === null) return;
+    const by = landed - cue;
+    if (by > LATE_LIMIT) {
+      this.late.push({ kind, cue: desc, by: +by.toFixed(3) });
+      console.warn(`[late] scene ${this.n} ${kind} "${desc}" landed ${by.toFixed(2)}s after its cue`);
+    }
+  }
+
+  // ---- geometry ----------------------------------------------------------
+  private async box(t: Target): Promise<Box> {
+    if (typeof t === 'object' && 'width' in t && !('count' in t)) return t as Box;
+    const loc = typeof t === 'string' ? this.page.locator(t).first() : (t as Locator).first();
+    await loc.waitFor({ state: 'visible', timeout: 8000 });
+    const b = await loc.boundingBox();
+    if (!b) throw new Error(`scene ${this.n}: no box for target`);
+    if (b.y + b.height < 0 || b.y > VIEW.h || b.x + b.width < 0 || b.x > VIEW.w)
+      throw new Error(`scene ${this.n}: target is outside the viewport (${JSON.stringify(b)}); s.scrollTo() it first`);
+    return b;
+  }
+  private center(b: Box) {
+    return { x: Math.round(b.x + b.width / 2), y: Math.round(b.y + b.height / 2) };
+  }
+
+  // ---- pointer -----------------------------------------------------------
+  /** Eased human move: minimum-jerk speed profile along a slightly curved path. Ends at `landBy`.
+   *  Time-driven: slow CDP round trips make steps coarser, never make the move longer. */
+  private async moveTo(x: number, y: number, landBy: number | null) {
+    const p0 = { ...this.pointer };
+    const dist = Math.hypot(x - p0.x, y - p0.y);
+    let dur = dist < 4 ? 0.05 : Math.min(1.3, 0.38 + dist / 1500);
+    if (landBy !== null) {
+      await this.until(landBy - dur);
+      dur = Math.max(dist < 4 ? 0.05 : 0.3, Math.min(dur, landBy - this.now())); // behind: move faster, not later
+    }
+    const t0 = this.now();
+    this.side = -this.side;
+    const nx = dist ? -(y - p0.y) / dist : 0, ny = dist ? (x - p0.x) / dist : 0;
+    const off = dist * 0.07 * this.side;
+    const cx = (p0.x + x) / 2 + nx * off, cy = (p0.y + y) / 2 + ny * off;
+    this.pathLog.push([+t0.toFixed(3), p0.x, p0.y]);
+    for (;;) {
+      const u = Math.min(1, (this.now() - t0) / dur);
+      const e = 10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5;
+      const px = (1 - e) ** 2 * p0.x + 2 * (1 - e) * e * cx + e ** 2 * x;
+      const py = (1 - e) ** 2 * p0.y + 2 * (1 - e) * e * cy + e ** 2 * y;
+      await this.page.mouse.move(u >= 1 ? x : px, u >= 1 ? y : py);
+      this.pathLog.push([+this.now().toFixed(3), +(u >= 1 ? x : px).toFixed(1), +(u >= 1 ? y : py).toFixed(1)]);
+      if (u >= 1) break;
+      await sleep(8);
+    }
+    this.pointer = { x, y };
+  }
+
+  // ---- actions -----------------------------------------------------------
+  /** Load a page, check fonts and calm state, then start the clip. Voice starts voiceAt later. */
+  async go(url: string, opts: { ready?: string } = {}) {
+    await this.page.goto(url, { waitUntil: 'load' });
+    // `ready`: an element that appears after hydration or a fetch (e.g. «See a demo» on the landing page),
+    // awaited before the clip starts so nothing pops in or shifts the layout on camera
+    if (opts.ready) await this.page.locator(opts.ready).first().waitFor({ state: 'visible', timeout: 15_000 });
+    await this.settle();
+    await this.preflight('start');
+    if (!this.recording) await this.startCapture();
+  }
+
+  /** Wait for load, web fonts and two painted frames. */
+  async settle(ms = 250) {
+    await this.page.waitForLoadState('load');
+    await this.page.evaluate(() => document.fonts.ready.then(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)))));
+    await sleep(ms);
+  }
+
+  async click(target: Target, cue: Cue & { cut?: boolean } = {}) {
+    const cueT = this.cueTime(cue);
+    const b = await this.box(target);
+    const c = this.center(b);
+    await this.moveTo(c.x, c.y, cueT === null ? null : cueT - HOVER_DWELL);
+    if (cueT !== null) await this.until(cueT);
+    const tp = this.now();
+    this.lateCheck('click', cueT, tp, cue.on ?? '');
+    await this.autoLabels();
+    this.events.push({ t: +tp.toFixed(3), kind: 'click', box: b, cue: cue.on });
+    this.presses.push([+tp.toFixed(3), c.x, c.y]);
+    if (cue.cut) this.cutStart(); // frames after the press are dropped until cutEnd(): hides saves and page loads
+    await this.page.mouse.down();
+    await sleep(70);
+    await this.page.mouse.up();
+  }
+
+  async hover(target: Target, cue: Cue = {}) {
+    const cueT = this.cueTime(cue);
+    const b = await this.box(target);
+    const c = this.center(b);
+    await this.moveTo(c.x, c.y, cueT === null ? null : cueT - HOVER_DWELL);
+    if (cueT !== null) await this.until(cueT);
+    const tl = this.now();
+    this.lateCheck('hover', cueT, tl, cue.on ?? '');
+    await this.autoLabels();
+    this.events.push({ t: +tl.toFixed(3), kind: 'hover', box: b, cue: cue.on });
+  }
+
+  /** Direct the viewer's eye to a region without moving the pointer. `wide` asks for a wider view. */
+  async look(target: Target, cue: Cue & { wide?: boolean } = {}) {
+    const cueT = this.cueTime(cue);
+    const b = await this.box(target); // resolve geometry before the cue so the landing is not late
+    if (cueT !== null) await this.until(cueT);
+    const tl = this.now();
+    this.lateCheck('look', cueT, tl, cue.on ?? '');
+    await this.autoLabels();
+    this.events.push({ t: +tl.toFixed(3), kind: 'look', box: b, wide: cue.wide, cue: cue.on });
+  }
+
+  /** Lower-third in the edit: exact label + short hint, shown from the cue for `hold` seconds. */
+  async callout(label: string, hint: string, cue: Cue & { hold?: number; scope?: Target } = {}) {
+    const cueT = this.cueTime(cue);
+    await this.label(label, cue.scope);
+    if (cueT !== null) await this.until(cueT);
+    await this.autoLabels();
+    const tl = this.now();
+    this.lateCheck('callout', cueT, tl, cue.on ?? label);
+    this.events.push({ t: +tl.toFixed(3), kind: 'callout', label, hint, hold: cue.hold ?? 3.2, cue: cue.on });
+  }
+
+  /** Type into a field one char at a time (the field is clicked at the cue first). */
+  async type(target: Target, text: string, cue: Cue & { delay?: number } = {}) {
+    await this.click(target, cue);
+    const b = await this.box(target);
+    this.events.push({ t: +this.now().toFixed(3), kind: 'type', box: b, text: /pass/i.test(String(target)) ? '' : text });
+    const d = cue.delay ?? 65;
+    for (let i = 0; i < text.length; i++) {
+      await this.page.keyboard.type(text[i]);
+      await sleep(d + ((i * 37) % 31) - 15);
+    }
+  }
+
+  /** Smooth scroll so `target` sits near the upper third (`align: 'bottom'`: its bottom edge on the viewport's bottom edge,
+   *  which keeps whatever follows it in the page out of the picture); finishes at the cue. */
+  async scrollTo(target: Target, cue: Cue & { align?: 'bottom' } = {}) {
+    const cueT = this.cueTime(cue);
+    const loc = typeof target === 'string' ? this.page.locator(target).first() : (target as Locator).first();
+    await loc.waitFor({ state: 'attached' });
+    const { y: wantY, cur } = await loc.evaluate((el, bottom) => {
+      const r = el.getBoundingClientRect();
+      const y = bottom ? r.bottom + window.scrollY - window.innerHeight + 2 : r.top + window.scrollY - window.innerHeight * 0.18;
+      return { y: Math.max(0, y), cur: window.scrollY };
+    }, cue.align === 'bottom');
+    const dist = Math.abs(wantY - cur);
+    const dur = Math.min(1.6, 0.5 + dist / 2400);
+    if (cueT !== null) await this.until(cueT - dur);
+    const t0 = this.now();
+    for (;;) {
+      const u = Math.min(1, (this.now() - t0) / dur);
+      const e = 10 * u ** 3 - 15 * u ** 4 + 6 * u ** 5;
+      await this.page.evaluate((y) => window.scrollTo({ top: y, behavior: 'instant' as ScrollBehavior }), cur + (wantY - cur) * e);
+      if (u >= 1) break;
+      await sleep(8);
+    }
+    this.events.push({ t: +this.now().toFixed(3), kind: 'scroll' });
+    await this.autoLabels();
+  }
+
+  /** Assert an exact on-screen label is visible; recorded in clips/labels.json. */
+  async label(text: string, scope?: Target) {
+    // One DOM walk (Playwright's getByText over a big page takes 0.3 s and made the next cue late).
+    // Whole-text match; curly, straight or Persian quotes around a quoted line (“…”, «…») and curly apostrophes are tolerated.
+    const esc = text.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/['’]/g, "['’]").replace(/\s+/g, '\\s+');
+    const src = `^\\s*["“”«]?${esc}["“”»]?\\s*$`;
+    let found: boolean;
+    if (scope === undefined) found = await this.page.evaluate(labelFind, { root: null, src });
+    else {
+      const sl = typeof scope === 'string' ? this.page.locator(scope).first() : (scope as Locator).first();
+      const h = await sl.elementHandle();
+      found = h ? await this.page.evaluate(labelFind, { root: h, src }) : false;
+    }
+    this.checked.add(norm(text));
+    const f = path.join(VDIR, 'clips', 'labels.json');
+    const all = fs.existsSync(f) ? readJson(f) : {};
+    all[`scene-${this.n}: ${text}`] = { scene: this.n, label: text, found };
+    fs.writeFileSync(f, JSON.stringify(all, null, 1));
+    if (!found) throw new Error(`scene ${this.n}: label "${text}" is not visible on screen`);
+  }
+
+  cutStart() {
+    this.cutOpen = (performance.now() - this.t0) / 1000;
+  }
+  cutEnd() {
+    if (this.cutOpen === null) return;
+    const end = (performance.now() - this.t0) / 1000;
+    this.cuts.push([this.cutOpen, end]);
+    this.cutAccum += end - this.cutOpen;
+    this.cutOpen = null;
+  }
+
+  /** Hold until the line ends + 0.6 s, check the page is calm, encode the clip. */
+  async finish() {
+    if (this.done) return;
+    if (this.voice) await this.until(this.voiceAt + this.voice.duration + 0.6);
+    await this.preflight('end');
+    const spoken = this.voice?.line ?? '';
+    const unchecked = [...spoken.matchAll(/«([^»]+)»/g)].map((m) => m[1]).filter((l) => !this.checked.has(norm(l)));
+    for (const l of unchecked) console.warn(`[label] scene ${this.n}: "${l}" is named in the line but was never checked`);
+    const end = this.now();
+    await this.cdp.send('Page.stopScreencast');
+    this.recording = false;
+    this.capturing = false;
+    await this.encode(end, unchecked);
+    this.done = true;
+  }
+
+  // ---- internals ---------------------------------------------------------
+  private async preflight(when: string) {
+    const problems: string[] = await this.page.evaluate(async (fams: string[]) => {
+      await document.fonts.ready;
+      const loaded = [...document.fonts].filter((f) => f.status === 'loaded').map((f) => f.family.replace(/["'\s]+/g, '_').toLowerCase());
+      const out: string[] = [];
+      // a family is required only when a rendered element on this page uses it (Chromium loads a web font lazily,
+      // so a page without monospace text never fetches JetBrains Mono; the landing page, which uses it, must)
+      const used = (f: string) => {
+        for (const e of document.querySelectorAll('body *')) {
+          if (!Array.from(e.childNodes).some((n) => n.nodeType === 3 && (n.textContent ?? '').trim())) continue;
+          const r = e.getBoundingClientRect();
+          if (r.width > 0 && r.height > 0 && getComputedStyle(e).fontFamily.replace(/[\s_"']/g, '').toLowerCase().includes(f.replace(/\s+/g, '').toLowerCase())) return true; // next/font names are __JetBrains_Mono_hash
+        }
+        return false;
+      };
+      for (const f of fams) if (used(f) && !loaded.some((l) => l.includes(f.replace(/\s+/g, '_').toLowerCase()))) out.push(`font not loaded: ${f}`);
+      const vis = (e: Element) => {
+        const r = e.getBoundingClientRect(), cs = getComputedStyle(e);
+        return r.width > 0 && r.height > 0 && cs.visibility !== 'hidden' && cs.display !== 'none';
+      };
+      for (const e of document.querySelectorAll('[role=alert]')) if (vis(e) && (e.textContent ?? '').trim()) out.push(`alert: ${(e.textContent ?? '').trim().slice(0, 60)}`);
+      const sel = '[data-sonner-toast],[role=progressbar],[aria-busy=true],.animate-spin,[class*=spinner],[class*=Toastify],nextjs-portal';
+      for (const e of document.querySelectorAll(sel)) if ((vis(e) && !(e.getAttribute('role') === 'progressbar' && e.hasAttribute('aria-valuenow'))) || e.tagName === 'NEXTJS-PORTAL') out.push(`toast/spinner: ${e.tagName.toLowerCase()}.${String(e.className).slice(0, 40)}`);
+      // a dev origin must never be on screen (text, input values): a viewer reads it as a dev build
+      const shown = (document.body.innerText || '') + ' ' + Array.from(document.querySelectorAll('input,textarea')).map((i) => (i as HTMLInputElement).value).join(' ');
+      if (/localhost|127\.0\.0\.1|pxb-demo-app/.test(shown)) out.push('dev origin on screen: ' + (shown.match(/(localhost|127\.0\.0\.1|pxb-demo-app)\S{0,30}/) ?? [''])[0]);
+      return out;
+    }, this.fonts);
+    this.preflightLog.push({ when, ok: problems.length === 0, problems });
+    if (problems.length) throw new Error(`scene ${this.n} preflight (${when}) failed: ${problems.join('; ')}`);
+  }
+
+  private async startCapture() {
+    this.cdp = await this.page.context().newCDPSession(this.page);
+    this.cdp.on('Page.screencastFrame', (e: any) => {
+      if (!this.capturing) return;
+      const i = this.frames.length;
+      const file = path.join(this.framesDir, `${String(i).padStart(6, '0')}.jpg`);
+      const buf = Buffer.from(e.data, 'base64');
+      if (i === 0) {
+        const [w, h] = jpegSize(buf);
+        if (w !== FRAME.w || h !== FRAME.h) this.badSize = `${w}x${h}`;
+        this.t0 = performance.now();
+        this.gotFirst();
+      }
+      fs.writeFileSync(file, buf);
+      this.frames.push({ ts: e.metadata.timestamp, file });
+      this.cdp.send('Page.screencastFrameAck', { sessionId: e.sessionId }).catch(() => {});
+    });
+    this.capturing = true;
+    await this.cdp.send('Page.startScreencast', { format: 'jpeg', quality: 65, maxWidth: FRAME.w, maxHeight: FRAME.h, everyNthFrame: 1 });
+    await Promise.race([this.firstFrame, sleep(5000).then(() => { throw new Error('no screencast frame within 5 s'); })]);
+    if (this.badSize) throw new Error(`screencast frames are ${this.badSize}, need ${FRAME.w}x${FRAME.h}; check deviceScaleFactor 2`);
+    this.recording = true;
+  }
+  private badSize = '';
+  private capturing = false;
+
+  private async encode(endClip: number, unchecked: string[]) {
+    const nn = String(this.n).padStart(2, '0');
+    const t_first = this.frames[0].ts;
+    // frame clip times: wall offset minus the cuts before it; frames inside a cut are dropped
+    const kept: { file: string; t: number }[] = [];
+    for (const f of this.frames) {
+      const w = f.ts - t_first;
+      if (this.cuts.some(([a, b]) => w >= a && w < b)) continue;
+      const before = this.cuts.filter(([, b]) => b <= w).reduce((s, [a, b]) => s + (b - a), 0);
+      kept.push({ file: f.file, t: Math.max(0, w - before) });
+    }
+    if (kept.length < 2) throw new Error(`scene ${this.n}: only ${kept.length} frames captured`);
+    const list: string[] = [];
+    kept.forEach((k, i) => {
+      const next = i + 1 < kept.length ? kept[i + 1].t : endClip;
+      list.push(`file '${k.file}'`, `duration ${Math.max(0.001, next - k.t).toFixed(4)}`);
+    });
+    list.push(`file '${kept[kept.length - 1].file}'`);
+    const lf = path.join(this.framesDir, 'list.txt');
+    fs.writeFileSync(lf, list.join('\n'));
+    const out = path.join(VDIR, 'clips', `scene-${nn}.mp4`);
+    execFileSync('ffmpeg', ['-y', '-v', 'error', '-f', 'concat', '-safe', '0', '-i', lf, '-vf', 'fps=30,format=yuv420p', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '12', '-r', '30', out]);
+    const span = kept[kept.length - 1].t - kept[0].t;
+    fs.writeFileSync(
+      path.join(VDIR, 'clips', `scene-${nn}.json`),
+      JSON.stringify({
+        scene: this.n, voiceAt: this.voiceAt, voiceDuration: this.voice?.duration ?? 0, duration: +endClip.toFixed(3),
+        fps: 30, size: [FRAME.w, FRAME.h], viewport: [VIEW.w, VIEW.h],
+        capture: { frames: kept.length, span: +span.toFixed(3), avg_fps: +(kept.length / Math.max(span, 0.1)).toFixed(1) },
+        cuts: this.cuts, events: this.events, path: this.pathLog, presses: this.presses, late: this.late,
+        voice_sig: this.voice?.sig, unchecked_labels: unchecked, preflight: this.preflightLog, fonts: this.fonts,
+      }),
+    );
+    fs.rmSync(this.framesDir, { recursive: true, force: true });
+  }
+
+  async dispose() {
+    this.capturing = false;
+    if (this.recording) await this.cdp.send('Page.stopScreencast').catch(() => {});
+    if (!this.done) fs.rmSync(this.framesDir, { recursive: true, force: true });
+  }
+}
+
+/** Register one Playwright test per scene. SCENES=2,5 runs only those. */
+export function scene(n: number, title: string, fn: (s: Scene) => Promise<void>) {
+  test(`scene ${n}: ${title}`, async ({ page }) => {
+    const only = process.env.SCENES;
+    test.skip(!!only && !only.split(',').map(Number).includes(n), 'not selected');
+    if (process.env.DEMO_RESET_PER_SCENE === '1' && process.env.DEMO_SEED_CMD) execSync(process.env.DEMO_SEED_CMD, { stdio: 'inherit' });
+    const s = new Scene(page, n);
+    await s.init();
+    try {
+      await fn(s);
+      await s.finish();
+    } finally {
+      await s.dispose();
+    }
+  });
+}

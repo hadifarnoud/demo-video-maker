@@ -1,0 +1,35 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Overlay styles: subtitle, callout and pointer. The renderer adds one element per item and
+     screenshots it on a transparent background. No libass: it reverses RTL word order. -->
+<style>
+/*FONTS*/
+:root { --ink: #0D1424; --mark: #D4FF3A; --slate: #3D5378; }
+html, body { margin: 0; background: transparent; }
+#stage { position: absolute; left: 0; top: 0; }
+.item { position: absolute; left: 0; top: 0; width: max-content; }
+
+.sub { font: 400 46px/1.32 "Atkinson Hyperlegible Next", sans-serif; color: #fff; background: rgba(13, 20, 36, .74);
+  padding: 14px 34px 18px; border-radius: 18px; max-width: 1560px; text-align: center; box-shadow: 0 6px 24px rgba(13, 20, 36, .22);
+  backdrop-filter: blur(2px); }
+.sub.rtl { font-family: "Vazirmatn", "Atkinson Hyperlegible Next", sans-serif; direction: rtl; line-height: 1.7; }
+.sub mark, .callout .lab { background: var(--mark); color: var(--ink); border-radius: 7px; padding: 0 .28em; font-weight: 700; unicode-bidi: isolate; white-space: normal; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+.sub.rtl mark[dir=ltr] { white-space: nowrap; }
+.sub { text-wrap: balance; }
+
+.callout { display: flex; gap: 0; background: rgba(255, 255, 255, .96); border-radius: 14px; overflow: hidden; width: 560px;
+  box-shadow: 0 10px 34px rgba(13, 20, 36, .26), 0 0 0 1px rgba(13, 20, 36, .08); font-family: "Atkinson Hyperlegible Next", sans-serif; }
+.callout::before { content: ""; width: 10px; background: var(--mark); flex: none; }
+.callout .body { padding: 16px 24px 18px; }
+.callout .lab { display: inline-block; font: 700 32px/1.25 "Bricolage Grotesque", sans-serif; padding: 2px .35em; }
+.callout .hint { margin-top: 10px; font-size: 26px; line-height: 1.35; color: var(--slate); }
+
+.pointer { width: 44px; height: 52px; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+</body>
+</html>

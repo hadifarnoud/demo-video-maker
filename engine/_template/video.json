@@ -1,0 +1,31 @@
+{
+  "output": "my-video",
+  "voice": {
+    "model_id": "eleven_v4",
+    "voice_id": "hpp4J3VqNfWAUOO0d1Us",
+    "language_code": "en",
+    "stability": 0.3,
+    "similarity_boost": 0.8,
+    "tags": "[warm, confident, friendly]",
+    "takes": 2,
+    "stt_model": "scribe_v2"
+  },
+  "fonts": ["Bricolage Grotesque", "Atkinson Hyperlegible Next", "JetBrains Mono"],
+  "intro_card": 2.2,
+  "outro_card": 2.0,
+  "cards": {
+    "brand": "Praxabase",
+    "intro": { "title": "Let your experts talk", "subtitle": "Smoke test of the demo-video pipeline", "url": "praxabase.com" },
+    "outro": { "title": "Book a pilot slot", "subtitle": "Start with one expert and one workflow.", "url": "pilot@praxabase.com" }
+  },
+  "zoom": { "max": 1.75 },
+  "music": {
+    "prompt": "Soft minimal ambient electronic bed, warm pads, gentle pulse, calm and confident product-demo mood, instrumental only, no vocals",
+    "seconds": 20,
+    "gain_db": -18,
+    "duck_db": -12
+  },
+  "pacing": { "voice_at": 0.5, "tail": 0.35, "gap": 0.85, "crossfade": 0.5 },
+  "subtitles": { "default": null },
+  "max_seconds": 30
+}

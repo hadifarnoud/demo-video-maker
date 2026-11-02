@@ -1,0 +1,5 @@
+{
+  "project": "my-project",
+  "box": "test_vps",
+  "base_url": "https://staging.example.com"
+}

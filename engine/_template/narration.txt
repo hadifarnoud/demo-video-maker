@@ -1,0 +1,2 @@
+One line per scene. Name every UI item by its exact on-screen label in «guillemets».
+Optional leading [tags] set the delivery for that line only.
