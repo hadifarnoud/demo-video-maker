@@ -31,6 +31,7 @@ $BOX run 01-tour edit
 $BOX run 01-tour gate
 $BOX fetch 01-tour             # out/, clip logs and takes to the media folder
 $BOX review 01-tour            # local page: change the voice, hear it, keep a take
+$BOX drift 01-tour             # no filming: every step and label against the current app; prints [drift] lines
 $BOX apply 01-tour             # kept takes -> re-record changed scenes, edit, gate, fetch
 $BOX rerecord 01-tour          # re-record late or low-fps scenes
 ```
@@ -198,7 +199,8 @@ Found while listening to 01-tour-fa:
 34. **`voice.lines`.** A per-scene voice text, written by the review page, for a fix in one scene only; `voice.respell` is for a word
     that is wrong everywhere. Subtitles keep the real text; the alignment is mapped back with a diff.
 35. **Clip and take must match.** Each clip log stores the signature of the voice take it was recorded against; the gate fails a mismatch and a scene with no clip.
-36. **Media outside the repo.** Removing a worktree no longer deletes the only copy of a finished video, and the repo carries sources only.
+36. **Drift check (idea from `aidemo`'s CI replay).** A merged app moved 78 commits past the Praxabase videos without anyone noticing. `box.sh drift` runs the spec with the clock, capture and clip logs off.
+37. **Media outside the repo.** Removing a worktree no longer deletes the only copy of a finished video, and the repo carries sources only.
 
 ## Known limits
 

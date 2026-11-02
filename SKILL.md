@@ -27,6 +27,8 @@ Project and URL, the account or demo sign-in, UI language, narration language, v
 6. **Independent review.** A fresh agent on `fable` or `opus` checks frames and the transcript, in the language's register. Fix findings, re-review. Never review your own cut or tooling change in the same agent.
 7. **Listen to the final** with the user, then deliver. Send the contact sheet, transcript and loudness.
 
+**Later:** the app keeps moving. Run `$BOX drift <v>` before relying on an old video: it runs every step and label against the current app without filming or spending, and lists what no longer matches.
+
 Done means both mp4s under the limit, every gate item PASS, reviewer findings fixed, the user has listened, and the sources committed.
 
 ## Rules

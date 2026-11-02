@@ -23,6 +23,7 @@ const VIEW = { w: 1280, h: 720 };
 const FRAME = { w: 2560, h: 1440 };
 const LATE_LIMIT = 0.35; // s; a later landing than this fails the quality gate
 const HOVER_DWELL = 0.06; // pointer settles on the target this long before the cue
+const DRY = process.env.DEMO_DRY === '1'; // drift check: run every step and label against the live app, film nothing
 
 export type Cue = { on?: string; nth?: number; at?: 'start' | 'end' | number };
 export type Box = { x: number; y: number; width: number; height: number };
@@ -152,6 +153,7 @@ export class Scene {
     return this.cutOpen !== null ? this.cutOpen - this.cutAccum : wall - this.cutAccum;
   }
   private async until(t: number) {
+    if (DRY) return;
     for (;;) {
       if (this.cutOpen !== null) throw new Error('cannot wait on the clip clock inside cutStart/cutEnd');
       const d = t - this.now();
@@ -164,6 +166,13 @@ export class Scene {
   /** Cue time in clip seconds, or null when no cue given. */
   private cueTime(cue?: Cue): number | null {
     if (!cue?.on) return null;
+    if (DRY) { // before any voice is paid for: check the cue against the script, and the label against the screen
+      const line = fs.readFileSync(path.join(VDIR, 'narration.txt'), 'utf8').split('\n')[this.n - 1] ?? '';
+      if (!findPhrase(line, cue.on, cue.nth ?? 0)) console.log(`[drift] scene ${this.n}: cue "${cue.on}" is not in the script`);
+      const m = cue.on.match(/«([^»]+)»/);
+      if (m) this.pendingLabels.push(m[1]);
+      return 0;
+    }
     if (!this.voice) throw new Error(`scene ${this.n}: cue "${cue.on}" but no audio/scene-NN.json; voice the line first (voice.py)`);
     const hit = findPhrase(this.voice.text, cue.on, cue.nth ?? 0);
     if (!hit) throw new Error(`scene ${this.n}: cue phrase "${cue.on}" not found in "${this.voice.text}"`);
@@ -208,6 +217,11 @@ export class Scene {
   /** Eased human move: minimum-jerk speed profile along a slightly curved path. Ends at `landBy`.
    *  Time-driven: slow CDP round trips make steps coarser, never make the move longer. */
   private async moveTo(x: number, y: number, landBy: number | null) {
+    if (DRY) {
+      await this.page.mouse.move(x, y);
+      this.pointer = { x, y };
+      return;
+    }
     const p0 = { ...this.pointer };
     const dist = Math.hypot(x - p0.x, y - p0.y);
     let dur = dist < 4 ? 0.05 : Math.min(1.3, 0.38 + dist / 1500);
@@ -356,6 +370,10 @@ export class Scene {
       found = h ? await this.page.evaluate(labelFind, { root: h, src }) : false;
     }
     this.checked.add(norm(text));
+    if (DRY) {
+      if (!found) console.log(`[drift] scene ${this.n}: label "${text}" is not on screen`);
+      return; // list every stale label in one run, and leave the real clip logs alone
+    }
     const f = path.join(VDIR, 'clips', 'labels.json');
     const all = fs.existsSync(f) ? readJson(f) : {};
     all[`scene-${this.n}: ${text}`] = { scene: this.n, label: text, found };
@@ -379,9 +397,14 @@ export class Scene {
     if (this.done) return;
     if (this.voice) await this.until(this.voiceAt + this.voice.duration + 0.6);
     await this.preflight('end');
-    const spoken = this.voice?.line ?? '';
+    const spoken = DRY ? fs.readFileSync(path.join(VDIR, 'narration.txt'), 'utf8').split('\n')[this.n - 1] ?? '' : this.voice?.line ?? '';
     const unchecked = [...spoken.matchAll(/«([^»]+)»/g)].map((m) => m[1]).filter((l) => !this.checked.has(norm(l)));
     for (const l of unchecked) console.warn(`[label] scene ${this.n}: "${l}" is named in the line but was never checked`);
+    if (DRY) {
+      for (const l of unchecked) console.log(`[drift] scene ${this.n}: "${l}" is in the script but no step checks it`);
+      this.done = true;
+      return;
+    }
     const end = this.now();
     await this.cdp.send('Page.stopScreencast');
     this.recording = false;
@@ -424,6 +447,11 @@ export class Scene {
   }
 
   private async startCapture() {
+    if (DRY) {
+      this.t0 = performance.now();
+      this.recording = true;
+      return;
+    }
     this.cdp = await this.page.context().newCDPSession(this.page);
     this.cdp.on('Page.screencastFrame', (e: any) => {
       if (!this.capturing) return;
@@ -487,7 +515,7 @@ export class Scene {
 
   async dispose() {
     this.capturing = false;
-    if (this.recording) await this.cdp.send('Page.stopScreencast').catch(() => {});
+    if (this.recording && !DRY) await this.cdp.send('Page.stopScreencast').catch(() => {});
     if (!this.done) fs.rmSync(this.framesDir, { recursive: true, force: true });
   }
 }
