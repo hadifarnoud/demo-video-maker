@@ -99,7 +99,8 @@ def main():
         log = json.loads(lp.read_text())
         late += [dict(scene=log["scene"], **l) for l in log["late"]]
         pre += [dict(scene=log["scene"], **p) for p in log["preflight"] if not p["ok"]]
-        if log["capture"]["avg_fps"] < gcfg.get("min_capture_fps", 20):
+        allow = gcfg.get("capture_allow", {}).get(str(log["scene"]), {})  # {"min": 15, "why": "..."}: a documented exception
+        if log["capture"]["avg_fps"] < allow.get("min", gcfg.get("min_capture_fps", 20)):
             slow.append(dict(scene=log["scene"], avg_fps=log["capture"]["avg_fps"]))
     add("no cue landed late (> 0.35 s)", not late, late or "ok")
     add("preflight clean (fonts loaded, no error toast/alert/spinner)", not pre, pre or "ok")

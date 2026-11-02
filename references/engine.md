@@ -200,7 +200,8 @@ Found while listening to 01-tour-fa:
     that is wrong everywhere. Subtitles keep the real text; the alignment is mapped back with a diff.
 35. **Clip and take must match.** Each clip log stores the signature of the voice take it was recorded against; the gate fails a mismatch and a scene with no clip.
 36. **Drift check (idea from `aidemo`'s CI replay).** A merged app moved 78 commits past the Praxabase videos without anyone noticing. `box.sh drift` runs the spec with the clock, capture and clip logs off.
-37. **Media outside the repo.** Removing a worktree no longer deletes the only copy of a finished video, and the repo carries sources only.
+37. **Capture allowance.** `video.json` `gate.capture_allow` (`{"8": {"min": 15, "why": "..."}}`) lowers the floor for one named scene with a stated reason, when an idle box still cannot reach it and the scene is mostly static. Load on the box is the usual cause, so re-record first.
+38. **Media outside the repo.** Removing a worktree no longer deletes the only copy of a finished video, and the repo carries sources only.
 
 ## Known limits
 

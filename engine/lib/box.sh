@@ -153,10 +153,11 @@ rerecord() {
     fetch "$v" >/dev/null 2>&1 || true
     list=$(python3 - "$MEDIA/$v" "$HERE/$v" <<'PY'
 import glob, json, sys
-mn = json.load(open(sys.argv[2] + "/video.json")).get("gate", {}).get("min_capture_fps", 20)
+g = json.load(open(sys.argv[2] + "/video.json")).get("gate", {})
 bad = []
 for f in sorted(glob.glob(sys.argv[1] + "/clips/scene-*.json")):
     l = json.load(open(f))
+    mn = g.get("capture_allow", {}).get(str(l["scene"]), {}).get("min", g.get("min_capture_fps", 20))
     if l["late"] or l["capture"]["avg_fps"] < mn:
         bad.append(str(l["scene"]))
 print(",".join(bad))
