@@ -306,6 +306,7 @@ export class Scene {
     fs.mkdirSync(this.framesDir, { recursive: true });
     fs.mkdirSync(path.join(VDIR, 'clips'), { recursive: true });
     if (DRY && process.env.DEMO_SHOTS === '1' && fs.existsSync(path.join(VDIR, 'drift-shots'))) for (const f of fs.readdirSync(path.join(VDIR, 'drift-shots'))) if (f.startsWith(`scene-${String(this.n).padStart(2, '0')}-`) || f === `scene-${String(this.n).padStart(2, '0')}.json`) fs.rmSync(path.join(VDIR, 'drift-shots', f));
+    if (!DRY) fs.rmSync(path.join(VDIR, 'clips', `fail-${String(this.n).padStart(2, '0')}.png`), { force: true }); // a new take clears the last take's evidence
     const hf = path.join(VDIR, 'clips', 'secret-hits.json'); // a new take of this scene clears the last take's hit
     if (!DRY && fs.existsSync(hf)) { const h = readJson(hf); delete h[String(this.n)]; fs.writeFileSync(hf, JSON.stringify(h, null, 1)); }
     const calm = videoCfg().calm_css ? String(videoCfg().calm_css) : '';
@@ -555,6 +556,7 @@ export class Scene {
 
   /** Evidence for a failed take: the screen as it was (clips/fail-NN.png; drift-shots/ in a drift run). */
   async failShot(): Promise<string> {
+    if (this.secretOnScreen) return '';
     const dir = path.join(VDIR, DRY ? 'drift-shots' : 'clips');
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `fail-${String(this.n).padStart(2, '0')}.png`);
@@ -564,11 +566,16 @@ export class Scene {
     return file;
   }
   private shot = false;
+  private secretOnScreen = false; // a screenshot would hold the value the log refuses to name
 
   /** The visible texts closest to a label that was not found, best first. */
   private async nearest(text: string): Promise<string[]> {
     const seen = await this.page.evaluate(visibleTexts).catch(() => [] as string[]);
-    return seen.map((t) => ({ t, s: similar(text, t) })).filter((x) => x.s >= 0.3).sort((a, b) => b.s - a.s).slice(0, 5).map((x) => x.t);
+    const near = seen.map((t) => ({ t, s: similar(text, t) })).filter((x) => x.s >= 0.3).sort((a, b) => b.s - a.s).slice(0, 5).map((x) => x.t);
+    // these go to the console and labels.json: a text that looks like a secret stays out
+    const extra = near.map((value, i) => ({ field: `suggest:${i}`, value }));
+    const hits = await this.page.evaluate(secretFind, { cfg: SECRET_CFG, allow: this.secretAllow.map((a) => a.pattern), masked: this.maskedSelectors, extra }).catch(() => null);
+    return hits ? near.filter((_, i) => !hits.some((h) => h.field === `suggest:${i}`)) : [];
   }
 
 
@@ -710,6 +717,7 @@ export class Scene {
     const all = fs.existsSync(f) ? readJson(f) : {};
     all[String(this.n)] = { when, hits };
     fs.writeFileSync(f, JSON.stringify(all, null, 1));
+    this.secretOnScreen = true;
     throw new Error(`scene ${this.n} secret scan (${when}) found: ${msg}`);
   }
 
@@ -834,7 +842,7 @@ export function scene(n: number, title: string, fn: (s: Scene) => Promise<void>)
       await s.finish();
     } catch (e) {
       const png = await s.failShot();
-      console.error(`[fail] scene ${n}: ${String(e instanceof Error ? e.message : e).split('\n')[0]}\n[fail] screenshot ${path.relative(VDIR, png)}`);
+      console.error(`[fail] scene ${n}: ${String(e instanceof Error ? e.message : e).split('\n')[0]}\n[fail] ${png ? `screenshot ${path.relative(VDIR, png)}` : 'no screenshot: a secret was on screen'}`);
       throw e;
     } finally {
       await s.dispose();

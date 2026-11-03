@@ -223,7 +223,7 @@ Found while comparing with similar tools (2026-11):
     `aria-label`, `alt`, `value`, `href` and `src` (patterns only), open shadow roots, same-origin iframes, the URL and the title.
     The rules are in `lib/secret-patterns.json` (JWT, `sk_`, `ghp_`, `xox`, `AKIA`, `Bearer`, `?token=` style values, private keys, and a
     24+ character run with three character classes and high entropy; slugs and UUIDs pass). A hit fails the take and names the kind
-    and the field, never the value (`clips/secret-hits.json`). `gate.py` runs the same rules over the clip logs, labels, narration and
+    and the field, never the value (`clips/secret-hits.json`), and saves no failure screenshot. `gate.py` runs the same rules over the clip logs, labels, narration and
     subtitles. A known demo value goes in `video.json` `secrets.allow` (`{"pattern": regex tested against the match, "why": reason}`);
     a reason is required and the gate prints it.
 
@@ -240,7 +240,7 @@ Found while comparing with similar tools (2026-11):
 42. **Zoom stability.** The gate only checked how fast the camera moves, never how often. Targets 2.5 to 4 s apart each got a full
     zoom in and out (the camera went back to the full view whenever the next target was more than ~2 s away), which reads as
     pumping. Now the camera stays zoomed and pans when the next target comes within `zoom.stay` seconds (default 4.5) of the last one. (4.0 left a 3-cycle window in the real 01-tour, a 4.2 s gap between two targets; 4.5 gives 2.)
-    `edit.json` carries `zoom_cycles` and `zoom_travel` per scene (a cycle = in, hold, back to the full view; a clip that ends zoomed
+    `edit.json` carries `cycles`, `travel` and `cycle_times` per scene under `zoom` (a cycle = in, hold, back to the full view; a clip that ends zoomed
     cycles at its end, where the crossfade returns to the full view) and `zoom_cycle_times` on the timeline. The gate fails more
     than `gate.max_zoom_cycles` (default 2) cycles in any `gate.zoom_window_s` (default 10) seconds. `zoom.stay: 0` brings back the
     old pumping, which is how the check is tested. Re-edit an older cut (no filming, no voice) to get the numbers.
@@ -248,7 +248,7 @@ Found while comparing with similar tools (2026-11):
 43. **A failed label shows what was on screen.** A missing label used to stop with only its name, and the page was gone by the time
     anyone looked. `label()` now saves `clips/fail-NN.png` (`drift-shots/fail-NN.png` in a drift run) and names the five visible texts
     closest to it (bigram overlap) in the error, in `labels.json` (`suggest`, `shot`) and in the `[drift]` line, so a renamed button is a
-    one-line fix. A pre-flight failure and any other error in a scene save the same PNG. `box.sh fetch` brings `fail-*.png` back.
+    one-line fix. A text that looks like a secret is left out of the list. A pre-flight failure and any other error in a scene save the same PNG. `box.sh fetch` brings `fail-*.png` back.
 
 44. **Captions as text, a soft track and chapters.** The subtitle chunks existed only as burned-in pixels. `edit.py` now writes
     `out/<name>.srt` and `.vtt` (one cue per chunk, same times; isolates dropped), muxes the text as a `mov_text` track into the
@@ -265,7 +265,7 @@ Found while comparing with similar tools (2026-11):
     `mask` plates every match; the spec scan also reads `+=`, bracket writes, `removeChild`, `before/after` and subfolders; a label
     check with zero boxes fails when boxes were expected. Known holes: a mask is lost on a full page load (the secret scan still skips
     its selector), a typed value is logged unless the target text contains `pass`, and a lowercase-plus-digit token that is not hex
-    passes the entropy rule (the pattern rules still catch the usual key prefixes).
+    passes the entropy rule (the pattern rules still catch the usual key prefixes). Two places can still hold a secret that is on screen: Playwright's `work/pw/*/error-context.md` on the box after a failed scene (never fetched) and the `drift --shots` PNGs.
 
 47. **Review frames.** An even-spaced contact sheet misses the moments that break: a zoom peak, a click, a crossfade. `lib/frames.py` (run by the gate, or
     `box.sh run <v> frames [--n 20]`) reads `edit.json` (items, zoom groups, subtitles) and the clip logs (narrated clicks, typing, callouts) and

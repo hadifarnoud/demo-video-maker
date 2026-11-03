@@ -152,7 +152,7 @@ def main():
 
     allow = load_allow(cfg)
     texts = [(f"clips/scene-{n:02d}.json", scan_json({k: log.get(k) for k in ("events", "dom_edits", "preflight")}, allow)) for n, log in clips.items()]
-    texts.append(("clips/labels.json", scan_json(seen, allow)))
+    texts.append(("clips/labels.json", scan_json(list(seen.values()), allow)))  # values only: a key holds the label text, and a hit must not print it
     texts.append(("narration.txt", [(f"line {i}", k) for i, l in enumerate(lines, 1) for k in kinds_in(l, allow)]))
     if edit:
         texts.append((f"out/{name}.edit.json", scan_json(edit.get("subtitles", []), allow, "subtitles")))
