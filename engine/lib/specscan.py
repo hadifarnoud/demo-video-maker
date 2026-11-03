@@ -14,10 +14,10 @@ from pathlib import Path
 RULES = [
     ("injected code", r"\b(addInitScript|addScriptTag|addStyleTag)\b|\bnew Function\b|\beval\("),
     ("network rewrite", r"\.route\(|\brouteFromHAR\b|\.fulfill\(|\.setContent\("),
-    ("text or markup write", r"\.(textContent|innerText|innerHTML|outerHTML|nodeValue)\s*=(?!=)"),
-    ("value or property write", r"\.(value|hidden|disabled|checked|src|href|className)\s*=(?!=)|\bset\.call\(|\.style\b|\.classList\.(add|remove|toggle|replace)\("),
+    ("text or markup write", r"(\.|\[['\"])(textContent|innerText|innerHTML|outerHTML|nodeValue|data|title)(['\"]\])?\s*[-+*|]?=(?!=)"),
+    ("value or property write", r"\.(value|hidden|disabled|checked|src|href|className)\s*[-+*|]?=(?!=)|\bset\.call\(|\.style\b|\.classList\.(add|remove|toggle|replace)\("),
     ("attribute write", r"\.(setAttribute|removeAttribute|toggleAttribute)\("),
-    ("node insert or remove", r"\.(remove|replaceWith|replaceChildren|append|prepend|appendChild|insertBefore|insertAdjacent\w*|attachShadow)\(|\bcreateElement\(|\bdocument\.write\("),
+    ("node insert or remove", r"\.(remove|removeChild|replaceChild|replaceWith|replaceChildren|before|after|append|prepend|appendChild|insertBefore|insertAdjacent\w*|attachShadow)\(|\bcreateElement\(|\bdocument\.write\("),
     ("timer that keeps editing", r"\bsetInterval\(|\bdispatchEvent\("),
 ]
 
@@ -48,14 +48,14 @@ def strip_comments(src):
 
 
 def scan(vdir):
-    """-> [(file, line, rule, snippet)] for every raw DOM edit in the video folder's .ts files."""
+    """-> [(file, line, rule, snippet)] for every raw DOM edit in the video folder's .ts files (subfolders too; a shared helper outside the folder is not read)."""
     hits = []
-    for f in sorted(Path(vdir).glob("*.ts")):
+    for f in sorted(Path(vdir).rglob("*.ts")):
         for no, line in enumerate(strip_comments(f.read_text()).splitlines(), 1):
             for rule, rx in RULES:
                 m = re.search(rx, line)
                 if m:
-                    hits.append((f.name, no, rule, line.strip()[:90]))
+                    hits.append((str(f.relative_to(vdir)), no, rule, line.strip()[:90]))
     return hits
 
 

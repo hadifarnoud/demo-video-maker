@@ -199,12 +199,12 @@ function domRewrite(arg: { selector: string; prop: string; from: string | null; 
 
 /** Runs in the page: a blur plate over the first element matching `selector` (only the part after the text `after` when given). */
 function domMask(arg: { selector: string; after: string | null; id: string }): number {
-  const plate = document.createElement('div');
-  plate.id = arg.id;
-  document.body.appendChild(plate);
+  const plates: HTMLElement[] = [];
   const place = () => {
-    const el = document.querySelector(arg.selector);
-    if (!el) return;
+    const els = Array.from(document.querySelectorAll(arg.selector));
+    while (plates.length < els.length) { const d = document.createElement('div'); d.id = arg.id + '_' + plates.length; document.body.appendChild(d); plates.push(d); }
+    els.forEach((el, i) => {
+    const plate = plates[i];
     const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
     let x0 = r.left + 1;
     if (arg.after !== null) {
@@ -213,6 +213,7 @@ function domMask(arg: { selector: string; after: string | null; id: string }): n
       x0 = r.left + parseFloat(cs.paddingLeft) + ctx.measureText(arg.after).width + 2;
     }
     Object.assign(plate.style, { position: 'fixed', left: x0 + 'px', top: r.top + 1 + 'px', width: Math.max(0, r.right - x0 - 1) + 'px', height: r.height - 2 + 'px', zIndex: '2147483000', pointerEvents: 'none', backdropFilter: 'blur(9px)', background: 'rgba(240,243,247,0.72)', borderRadius: '4px' });
+    });
   };
   place();
   setInterval(place, 20);
@@ -584,9 +585,9 @@ export class Scene {
       d.id = '__dvm_shot_box';
       Object.assign(d.style, { position: 'fixed', left: b.x + 'px', top: b.y + 'px', width: b.width + 'px', height: b.height + 'px', outline: '3px solid #ff2d95', outlineOffset: '2px', zIndex: '2147483647', pointerEvents: 'none' });
       document.body.appendChild(d);
-    }, box);
+    }, box).catch(() => {});
     await this.page.screenshot({ path: path.join(dir, file) }).catch(() => {});
-    await this.page.evaluate(() => document.getElementById('__dvm_shot_box')?.remove());
+    await this.page.evaluate(() => document.getElementById('__dvm_shot_box')?.remove()).catch(() => {});
     this.shotLog.push({ file, kind, box, ...extra });
   }
 
@@ -596,14 +597,15 @@ export class Scene {
   async rewrite(selector: string, o: { prop?: string; from?: string; to: string; why: string }) {
     if (!o.why?.trim()) throw new Error(`scene ${this.n}: rewrite(${selector}) needs a why`);
     await this.page.locator(selector).first().waitFor({ state: 'attached', timeout: 8000 });
+    if (o.from !== undefined && (o.from === '' || o.to.includes(o.from))) throw new Error(`scene ${this.n}: rewrite(${selector}): \`from\` must be non-empty and not appear in \`to\` (it would grow on every tick)`);
     const prop = o.prop ?? 'text';
     const r = await this.page.evaluate(domRewrite, { selector, prop, from: o.from ?? null, to: o.to });
     if (r.changed === 0) {
-      const m = `scene ${this.n}: rewrite(${selector}) changed nothing (${r.matched} match${r.matched === 1 ? '' : 'es'}); the app no longer renders "${o.from ?? '(value)'}" there`;
+      const m = `scene ${this.n}: rewrite(${selector}) changed nothing (${r.matched} match${r.matched === 1 ? '' : 'es'}); the app no longer renders the text to replace there`;
       if (DRY) { console.log(`[drift] ${m}`); return; }
       throw new Error(m);
     }
-    const tok = (x: string) => x.length > 60 ? x.slice(0, 40) + '…' : x.replace(/[A-Za-z0-9_+=-]{16,}/g, '…'); // a log must not carry the secret it hides
+    const tok = (x: string) => x.length > 40 || /[A-Za-z0-9_+=-]{16,}/.test(x) ? `<${x.length} chars>` : x; // a log must not carry the secret it hides
     this.domEdits.push({ t: +this.now().toFixed(3), kind: 'rewrite', selector, prop, before: tok(r.before), after: tok(o.to), why: o.why });
   }
 

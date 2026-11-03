@@ -258,6 +258,11 @@ Found while comparing with similar tools (2026-11):
     box outlined, and `scene-NN.json` with the boxes. They are the boxes `clips/scene-NN.json` holds after a real record, taken without
     filming or voice. The planned subtitle band is not drawn: it needs a recorded clip (`edit.py --plan`). `box.sh sync` clears the
     old shots.
+46. **Review fixes.** A `rewrite` log keeps no part of a long or token-like value (length only); `from` must be non-empty and not inside `to`;
+    `mask` plates every match; the spec scan also reads `+=`, bracket writes, `removeChild`, `before/after` and subfolders; a label
+    check with zero boxes fails when boxes were expected. Known holes: a mask is lost on a full page load (the secret scan still skips
+    its selector), a typed value is logged unless the target text contains `pass`, and a lowercase-plus-digit token that is not hex
+    passes the entropy rule (the pattern rules still catch the usual key prefixes).
 
 ## Known limits
 

@@ -192,7 +192,10 @@ def main():
             add("named labels not covered by a subtitle (pixel diff)", False, "edit.json predates label boxes: run edit again")
         elif subs_mp4.exists() and nosubs_mp4.exists() and edit.get("size") == [1920, 1080]:
             n_box, covered = label_cover(nosubs_mp4, subs_mp4, edit["label_rects"], gcfg.get("label_cover_frac", 0.02))
-            add("named labels not covered by a subtitle (pixel diff)", not covered, dict(boxes_checked=n_box, covered=covered) if covered else f"{n_box} boxes, none covered")
+            want = sum(len(r["samples"]) for r in edit["label_rects"])
+            add("named labels not covered by a subtitle (pixel diff)", not covered and (n_box > 0 or not want), dict(boxes_checked=n_box, covered=covered) if covered or (want and not n_box) else f"{n_box} boxes, none covered")
+        else:
+            add("named labels not covered by a subtitle (pixel diff)", False, "needs both full-size mp4s (not a preview)")
         sc = edit.get("sidecars", {})
         if "srt" not in sc:
             add("subtitle sidecars, soft track and chapters", False, "edit.json predates sidecars: run edit again")
