@@ -394,7 +394,7 @@ def main():
                 callouts.append(dict(id=e["cid"], label=e["label"], hint=e["hint"]))
     ov = work / f"overlays-{FPS}"
     ov.mkdir(exist_ok=True)
-    plan = dict(outDir=str(ov), fps=FPS, theme=theme, cards=cards, subtitles=[dict(id=s["id"], rtl=s["rtl"], parts=s["parts"]) for s in subs], callouts=callouts)
+    plan = dict(renderer=2, outDir=str(ov), fps=FPS, theme=theme, cards=cards, subtitles=[dict(id=s["id"], rtl=s["rtl"], parts=s["parts"]) for s in subs], callouts=callouts)
     plan_s = json.dumps(plan, sort_keys=True)
     ph = ov / "plan.json"
     if not (ph.exists() and ph.read_text() == plan_s and (ov / "index.json").exists()):
@@ -744,6 +744,7 @@ def main():
         subtitle_overlaps={k: v[1] for k, v in sub_pos.items() if v[1]},
         subtitle_pos={k: v[0] for k, v in sub_pos.items()},
         label_rects=label_rects,
+        text_px=index.get("text_px"),
         callouts={i["id"]: i["callouts_placed"] for i in items if i["kind"] == "scene" and i["callouts_placed"]},
         audio=dict(measured=meas, music=music_info), outputs=outs,
         sidecars=dict(srt=str(srt.relative_to(vdir)), vtt=str(vtt.relative_to(vdir)), cues=len(subs), soft_track_in="nosubs" if srt else None, language=lang3, chapters=[dict(start=round(t0, 3), title=ti) for t0, ti in chapters]) if srt else dict(chapters=[dict(start=round(t0, 3), title=ti) for t0, ti in chapters]),

@@ -154,6 +154,23 @@ try {
     path.join(out, 'pointer.png'),
   );
   index.pointer_hotspot = [6, 4];
+  // measured, not assumed: computed font size (1080p px) of the text the video adds on top of the product; the gate checks it at 720p
+  index.text_px = await page.evaluate(() => {
+    const st = document.getElementById('stage');
+    const px = (cls, inner) => {
+      st.innerHTML = inner;
+      const v = parseFloat(getComputedStyle(st.querySelector(cls)).fontSize);
+      st.innerHTML = '';
+      return v;
+    };
+    return {
+      subtitle: px('.sub', '<div class="item sub">x</div>'),
+      subtitle_rtl: px('.sub', '<div class="item sub rtl">x</div>'),
+      subtitle_label: px('.sub mark', '<div class="item sub"><mark>x</mark></div>'),
+      callout_label: px('.lab', '<div class="item callout"><div class="body"><span class="lab">x</span></div></div>'),
+      callout_hint: px('.hint', '<div class="item callout"><div class="body"><div class="hint">x</div></div></div>'),
+    };
+  });
 } finally {
   await browser.close();
 }

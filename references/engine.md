@@ -29,6 +29,7 @@ $BOX run 01-tour record        # SCENES=2,5 limits it
 $BOX run 01-tour edit --preview  # 960x540 / 15 fps; --plan writes subtitle positions without rendering
 $BOX run 01-tour edit
 $BOX run 01-tour gate
+$BOX run 01-tour text          # sample subtitle + callout at 720p with the video's theme; no clips needed
 $BOX run 01-tour frames        # ~20 review frames again (--n 20); the gate already writes them
 $BOX fetch 01-tour             # out/, clip logs and takes to the media folder
 $BOX review 01-tour            # local page: change the voice, hear it, keep a take
@@ -98,13 +99,13 @@ along). `DEMO_ENTRY_URL` and `DEMO_LOGIN_URL` still work and come after it in th
 per scene `{"3": {"off": true}}`); `music` (`prompt`, `seconds`, `gain_db`, `duck_db`); `pacing` (`voice_at`, `tail`, `gap`,
 `crossfade`); `subtitles` (`{"default": "bottom", "3": "top"}`; otherwise bottom, or top when the action is down there); `subtitle_top_margin` (`{"2": 120}`: px from the top of the 1080 frame for a top subtitle in that scene, to sit below a site nav bar);
 `redscan` (`{"allow": {"3": {"frac": 0.03, "why": "..."}}}`: documented per-scene allowance, see "Changes to the method" 17); `theme` (card/overlay CSS variables); `secrets` (`{"allow": [{"pattern", "why"}]}`: known demo values the secret scan lets through); `calm_css` (CSS injected in every page to show steps still being set up in a neutral
-colour); `max_seconds`; `gate` (`stt_min`, `lufs_tol`, `max_pan`, `max_zoom_rate`, `max_zoom_cycles`, `zoom_window_s`, `label_cover_frac`, `min_capture_fps`).
+colour); `max_seconds`; `gate` (`min_text_px_720`, `stt_min`, `lufs_tol`, `max_pan`, `max_zoom_rate`, `max_zoom_cycles`, `zoom_window_s`, `label_cover_frac`, `min_capture_fps`).
 
 ## Gate (`lib/gate.py`)
 
 Automated: output shape (1920x1080, 30 fps, audio), duration limit, every `«label»` of the narration was found on screen,
 no late cue, pre-flight clean, no secret on screen or in the logs, no raw DOM edit in the spec (declared ones are listed), steady capture rate, red-state scan, camera speed and zoom cycles, subtitles never cover an action or a named label (geometry and a pixel diff),
-music covers the video, loudness -16 LUFS +-1, STT of the final mix vs `narration.txt`. Writes `out/<name>.gate.json` and
+subtitle and callout text at least 18 px at 720p (see 48), music covers the video, loudness -16 LUFS +-1, STT of the final mix vs `narration.txt`. Writes `out/<name>.gate.json` and
 `out/<name>.contact.jpg` (1 frame / 1.5 s) and `out/<name>.review/` (about 20 frames and `index.json`, see 47). Still manual: an independent reviewer looks at the contact sheet and
 transcript, including the zoom moves and the subtitle placement.
 
@@ -271,6 +272,16 @@ Found while comparing with similar tools (2026-11):
     screen, the cue). First and last frame always; the rest is an equal share of mid-crossfade boundaries, zoom peaks, clicks and callouts, each spread over the
     timeline; frames under 0.9 s apart keep the higher priority; short videos are topped up at the widest gap. Tried on the 01-tour cut: 20 frames
     (6 boundaries, 5 peaks, 6 clicks). It is an aid for the four review lenses, not a gate item.
+
+48. **Text size at 720p.** The rule: text readable at 720p, 18 px at that height (27 px in the 1080p frame). `render-overlays.mjs` measures the computed
+    font size of the subtitle (LTR, RTL, label mark) and the callout label and hint in Chromium and writes `text_px` to `index.json`; `edit.py` copies it to
+    `edit.json`; the gate scales by 720/1080 and fails any under `gate.min_text_px_720` (default 18). Sizes are theme variables (`--sub-size` 46px,
+    `--lab-size` 32px, `--hint-size` 28px). The callout hint was 26 px (17.3 at 720p); now 28. `box.sh run <v> text` (`lib/textsize.py`) runs the same
+    measurement without clips. Proof on the box: defaults PASS (subtitle 30.7, label 21.3, hint 18.7); `--sub-size: 24px` FAILs (16.0); `--hint-size: 26px`
+    FAILs (17.3). **Not measured: the product's own UI text and the cards.** Clip logs hold only element boxes (CSS px). A box height is line height plus padding,
+    not font size, a wrapped label is several lines, and the zoom changes what the viewer sees, so a threshold on boxes would pass or fail by luck. UI text size is
+    an item of the text/readability review lens instead (cards are 30 px or more in the 1080p frame, so they pass by construction). `edit.json` from before this
+    change has no `text_px`: the gate fails it until the edit is run again (the overlay cache is keyed with a renderer version, so it re-renders).
 
 ## Known limits
 

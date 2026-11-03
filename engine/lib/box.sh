@@ -5,7 +5,7 @@
 #   box.sh sync                     copy the engine and video sources to the box, build the image, update the app checkout
 #   box.sh app                      build + start the app container (idempotent); no-op when project.json has no app
 #   box.sh reseed                   re-run the demo seed in the running app container
-#   box.sh run <video> <step> ...   step: voice [scene] [--force] [--music] [--recheck] | record | edit [--preview|--plan] | gate [--no-stt] | frames [--n 20]
+#   box.sh run <video> <step> ...   step: voice [scene] [--force] [--music] [--recheck] | record | edit [--preview|--plan] | gate [--no-stt] | frames [--n 20] | text
 #   box.sh fetch <video>            copy out/, clip logs and voice takes to the media folder
 #   box.sh review <video> [--port N]  local page: change what the voice reads, hear it, keep the take you approve
 #   box.sh drift <video> [--shots]  without filming, run every step and label against the current app: does the video still match?
@@ -119,6 +119,7 @@ PY
 )" ;;
     edit)   shift; cmd="python lib/edit.py $video $*" ;;
     gate)   shift; cmd="python lib/gate.py $video $*" ;;
+    text)   shift; cmd="python lib/textsize.py $video" ;;
     frames) shift; cmd="python lib/frames.py $video $*" ;;
     *) echo "unknown step $1" >&2; exit 2 ;;
   esac

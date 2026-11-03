@@ -36,6 +36,15 @@ def probe(path):
     return json.loads(out)
 
 
+def text_size_check(text_px, min720=18.0):
+    """text_px: measured font sizes (px at 1080p) of the subtitle and callout text. -> (ok, detail). Scale to 720p and compare."""
+    if not text_px:
+        return False, "edit.json has no text sizes (predates the check, or the overlay renderer measured nothing): run edit again"
+    at720 = {k: round(v * 720 / 1080, 1) for k, v in text_px.items()}
+    small = {k: v for k, v in at720.items() if v < min720}
+    return not small, dict(min_px_at_720p=min720, px_at_720p=at720, too_small=small) if small else dict(min_px_at_720p=min720, px_at_720p=at720)
+
+
 def label_cover(nosubs, subs, rects, max_frac, thresh=40):
     """Ground truth, independent of the edit's geometry: for every named label, compare its box in the picture with and without
     subtitles. -> (boxes checked, [labels whose box differs in more than max_frac of its pixels])."""
@@ -185,6 +194,8 @@ def main():
             win, cap, ts = gcfg.get("zoom_window_s", 10), gcfg.get("max_zoom_cycles", 2), edit["zoom_cycle_times"]
             worst = max(((sum(1 for u in ts if t <= u < t + win), t) for t in ts), default=(0, 0))
             add("camera does not pump (zoom cycles per window)", worst[0] <= cap, dict(most_cycles_in_window=worst[0], window_s=win, at=worst[1], limit=cap, cycles=len(ts), zoom_travel=round(sum(z["travel"] for z in zs.values()), 2)))
+        ok, detail = text_size_check(edit.get("text_px"), gcfg.get("min_text_px_720", 18))
+        add("subtitle and callout text readable at 720p (18 px)", ok, detail)
         add("subtitles never cover the action", not edit["subtitle_overlaps"], edit["subtitle_overlaps"] or "ok")
         old = sorted(n for n, l in clips.items() if l.get("log_version", 1) < LOG_VERSION)
         add("clip logs are current", not old, dict(re_record=old, why="the log predates a check the gate relies on; re-recording costs no voice") if old else "ok")
