@@ -281,9 +281,12 @@ export class Scene {
   private firstFrame!: Promise<void>;
   private gotFirst!: () => void;
 
-  constructor(page: Page, n: number) {
+  readonly title: string;
+
+  constructor(page: Page, n: number, title = '') {
     this.page = page;
     this.n = n;
+    this.title = title;
     const cfg = videoCfg();
     this.voiceAt = cfg.pacing?.voice_at ?? 0.5;
     this.fonts = cfg.fonts ?? [];
@@ -771,7 +774,7 @@ export class Scene {
     fs.writeFileSync(
       path.join(VDIR, 'clips', `scene-${nn}.json`),
       JSON.stringify({
-        log_version: 4, scene: this.n, voiceAt: this.voiceAt, voiceDuration: this.voice?.duration ?? 0, duration: +endClip.toFixed(3),
+        log_version: 4, scene: this.n, title: this.title, voiceAt: this.voiceAt, voiceDuration: this.voice?.duration ?? 0, duration: +endClip.toFixed(3),
         fps: 30, size: [FRAME.w, FRAME.h], viewport: [VIEW.w, VIEW.h],
         capture: { frames: kept.length, span: +span.toFixed(3), avg_fps: +(kept.length / Math.max(span, 0.1)).toFixed(1) },
         cuts: this.cuts, events: this.events, path: this.pathLog, presses: this.presses, late: this.late,
@@ -795,7 +798,7 @@ export function scene(n: number, title: string, fn: (s: Scene) => Promise<void>)
     const only = process.env.SCENES;
     test.skip(!!only && !only.split(',').map(Number).includes(n), 'not selected');
     if (process.env.DEMO_RESET_PER_SCENE === '1' && process.env.DEMO_SEED_CMD) execSync(process.env.DEMO_SEED_CMD, { stdio: 'inherit' });
-    const s = new Scene(page, n);
+    const s = new Scene(page, n, title);
     await s.init();
     try {
       await fn(s);

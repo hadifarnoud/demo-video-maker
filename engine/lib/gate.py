@@ -193,6 +193,19 @@ def main():
         elif subs_mp4.exists() and nosubs_mp4.exists() and edit.get("size") == [1920, 1080]:
             n_box, covered = label_cover(nosubs_mp4, subs_mp4, edit["label_rects"], gcfg.get("label_cover_frac", 0.02))
             add("named labels not covered by a subtitle (pixel diff)", not covered, dict(boxes_checked=n_box, covered=covered) if covered else f"{n_box} boxes, none covered")
+        sc = edit.get("sidecars", {})
+        if "srt" not in sc:
+            add("subtitle sidecars, soft track and chapters", False, "edit.json predates sidecars: run edit again")
+        else:
+            cues = lambda f: sum("-->" in l for l in (vdir / f).read_text().splitlines()) if (vdir / f).exists() else -1
+            found = {}
+            for p in (subs_mp4, nosubs_mp4):
+                j = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name:stream_tags=language", "-show_chapters", "-of", "json", str(p)], capture_output=True, text=True, check=True).stdout) if p.exists() else {}
+                found[p.name] = dict(subtitle_tracks=[f"{s['codec_name']}:{s.get('tags', {}).get('language', '')}" for s in j.get("streams", []) if s["codec_type"] == "subtitle"], chapters=len(j.get("chapters", [])))
+            want_ch = len(sc["chapters"])
+            ok = cues(sc["srt"]) == cues(sc["vtt"]) == len(edit["subtitles"]) and all(f["chapters"] == want_ch for f in found.values()) \
+                and found.get(nosubs_mp4.name, {}).get("subtitle_tracks") == [f"mov_text:{sc['language']}"]
+            add("subtitle sidecars, soft track and chapters", ok, dict(srt_cues=cues(sc["srt"]), vtt_cues=cues(sc["vtt"]), burned_in_chunks=len(edit["subtitles"]), chapters=want_ch, files=found))
         m = edit["audio"].get("music")
         if m:
             add("music bed covers the video", not m["shorter_than_video"], m)

@@ -246,6 +246,12 @@ Found while comparing with similar tools (2026-11):
     closest to it (bigram overlap) in the error, in `labels.json` (`suggest`, `shot`) and in the `[drift]` line, so a renamed button is a
     one-line fix. A pre-flight failure and any other error in a scene save the same PNG. `box.sh fetch` brings `fail-*.png` back.
 
+44. **Captions as text, a soft track and chapters.** The subtitle chunks existed only as burned-in pixels. `edit.py` now writes
+    `out/<name>.srt` and `.vtt` (one cue per chunk, same times; isolates dropped), muxes the text as a `mov_text` track into the
+    `-nosubs.mp4` (off by default, so a viewer can turn captions on without the burned-in ones; language from `voice.language_code`),
+    and writes one chapter per item (card or scene title, from `scene(n, 'Title')`) into both mp4s. The gate compares the cue counts
+    with the chunks and reads the track and chapters back with ffprobe. `--preview` writes none of the sidecars.
+
 ## Known limits
 
 - Capture is ~20-25 fps on test_vps (software rendering at 2x). The pointer and ripple are drawn from logs at 30 fps, so

@@ -244,6 +244,43 @@ def chunk_line(text, starts, ends, maxlen=66):
     return out
 
 
+# ---- sidecars: SRT/VTT, a soft subtitle track, chapters ----------------------------
+LANG3 = {"en": "eng", "fa": "fas", "ar": "ara", "de": "deu", "fr": "fra", "es": "spa", "nl": "nld", "tr": "tur", "it": "ita", "pt": "por", "ru": "rus"}
+
+
+def stamp(t, sep):
+    ms = int(round(t * 1000))
+    return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d}{sep}{ms % 1000:03d}"
+
+
+def cue_text(parts):
+    """Plain subtitle text: the label marks and any bidi isolates are dropped (a player lays RTL out itself)."""
+    return re.sub("[\u2066-\u2069]", "", "".join(p["s"] for p in parts)).strip()
+
+
+def write_sidecars(subs, path_stem):
+    """-> (srt path, vtt path). One cue per burned-in chunk, same times."""
+    srt, vtt = [], ["WEBVTT", ""]
+    for i, s in enumerate(subs, 1):
+        text = cue_text(s["parts"])
+        srt += [str(i), f"{stamp(s['t0'], ',')} --> {stamp(s['t1'], ',')}", text, ""]
+        vtt += [f"{stamp(s['t0'], '.')} --> {stamp(s['t1'], '.')}", text, ""]
+    a, b = Path(str(path_stem) + ".srt"), Path(str(path_stem) + ".vtt")
+    a.write_text("\n".join(srt))
+    b.write_text("\n".join(vtt))
+    return a, b
+
+
+def chapter_meta(chapters, total):
+    """ffmetadata text: one chapter per item, from its start to the next item's start."""
+    out = [";FFMETADATA1"]
+    for i, (t0, title) in enumerate(chapters):
+        t1 = chapters[i + 1][0] if i + 1 < len(chapters) else total
+        safe = re.sub(r"([=;#\\\n])", r"\\\1", title)
+        out += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={int(round(t0 * 1000))}", f"END={max(int(round(t1 * 1000)), int(round(t0 * 1000)) + 1)}", f"title={safe}"]
+    return "\n".join(out) + "\n"
+
+
 # ---- main ---------------------------------------------------------------------
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
@@ -660,10 +697,29 @@ def main():
     meas = json.loads(p1.stderr[p1.stderr.rindex("{") : p1.stderr.rindex("}") + 1])
     ln2 = f"{ln}:measured_I={meas['input_i']}:measured_TP={meas['input_tp']}:measured_LRA={meas['input_lra']}:measured_thresh={meas['input_thresh']}:offset={meas['target_offset']}:linear=true"
 
+    # chapters (one per item) in both files; the text as SRT/VTT beside them and as a soft track (off by default) in the clean file
+    def chapter_title(it):
+        if it["kind"] == "scene":
+            return it["log"].get("title") or f"Scene {it['n']}"
+        if it["id"] in ("intro", "outro"):
+            return cards_cfg.get(it["id"], {}).get("title") or it["id"].capitalize()
+        return it["cfg"].get("title") or f"Scene {it['n']}"
+
+    chapters = [(it["start"], chapter_title(it)) for it in items]
+    meta = work / "chapters.ffmeta"
+    meta.write_text(chapter_meta(chapters, total))
+    lang3 = LANG3.get(str(cfg.get("voice", {}).get("language_code", "")).split("-")[0], "und")
+    srt = vtt = None
+    if not preview:
+        srt, vtt = write_sidecars(subs, vdir / "out" / name)
+
     outs = {}
     for label, vid, fname in ([("nosubs", v_nosubs, f"{name}-nosubs.mp4")] if not preview else []) + [("subs", v_subs, f"{name}{tag}.mp4")]:
         dst = vdir / "out" / fname
-        run(["ffmpeg", "-y", "-v", "error", "-i", str(vid), "-i", str(wav), "-map", "0:v", "-map", "1:a", "-c:v", "copy", "-af", ln2, "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(dst)])
+        soft = label == "nosubs" and srt is not None
+        run(["ffmpeg", "-y", "-v", "error", "-i", str(vid), "-i", str(wav), "-i", str(meta)] + (["-i", str(srt)] if soft else []) + ["-map", "0:v", "-map", "1:a"] + (["-map", "3:s"] if soft else [])
+            + ["-map_chapters", "2", "-c:v", "copy", "-af", ln2, "-ar", "48000", "-ac", "2", "-c:a", "aac", "-b:a", "192k"]
+            + (["-c:s", "mov_text", "-metadata:s:s:0", f"language={lang3}", "-disposition:s:0", "0"] if soft else []) + ["-movflags", "+faststart", str(dst)])
         outs[label] = str(dst.relative_to(vdir))
 
     # -- decisions
@@ -690,6 +746,7 @@ def main():
         label_rects=label_rects,
         callouts={i["id"]: i["callouts_placed"] for i in items if i["kind"] == "scene" and i["callouts_placed"]},
         audio=dict(measured=meas, music=music_info), outputs=outs,
+        sidecars=dict(srt=str(srt.relative_to(vdir)), vtt=str(vtt.relative_to(vdir)), cues=len(subs), soft_track_in="nosubs" if srt else None, language=lang3, chapters=[dict(start=round(t0, 3), title=ti) for t0, ti in chapters]) if srt else dict(chapters=[dict(start=round(t0, 3), title=ti) for t0, ti in chapters]),
     )
     (vdir / "out" / f"{name}{tag}.edit.json").write_text(json.dumps(edit, indent=1))
     print(json.dumps(outs), f"total {total:.1f}s")
