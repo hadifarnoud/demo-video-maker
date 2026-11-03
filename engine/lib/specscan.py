@@ -11,9 +11,12 @@ import re
 import sys
 from pathlib import Path
 
+SOURCE = {".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"}
+OUTPUT = {"work", "out", "clips", "audio", "state", "drift-shots"}  # run output, never spec code
 RULES = [
     ("injected code", r"\b(addInitScript|addScriptTag|addStyleTag)\b|\bnew Function\b|\beval\("),
     ("network rewrite", r"\.route\(|\brouteFromHAR\b|\.fulfill\(|\.setContent\("),
+    ("object write", r"\bObject\.(assign|defineProperty)\(|\bhistory\.(pushState|replaceState)\("),
     ("text or markup write", r"(\.|\[['\"])(textContent|innerText|innerHTML|outerHTML|nodeValue|data|title)(['\"]\])?\s*[-+*|]?=(?!=)"),
     ("value or property write", r"\.(value|hidden|disabled|checked|src|href|className)\s*[-+*|]?=(?!=)|\bset\.call\(|\.style\b|\.classList\.(add|remove|toggle|replace)\("),
     ("attribute write", r"\.(setAttribute|removeAttribute|toggleAttribute)\("),
@@ -33,6 +36,9 @@ def strip_comments(src):
                 j += 2 if src[j] == "\\" else 1
             out.append(src[i : j + 1])
             i = j + 1
+        elif c == "\\":  # an escape outside a string: the \/\/ in a regex literal is not a comment
+            out.append(src[i : i + 2])
+            i += 2
         elif src.startswith("//", i):
             while i < n and src[i] != "\n":
                 i += 1
@@ -48,9 +54,10 @@ def strip_comments(src):
 
 
 def scan(vdir):
-    """-> [(file, line, rule, snippet)] for every raw DOM edit in the video folder's .ts files (subfolders too; a shared helper outside the folder is not read)."""
+    """-> [(file, line, rule, snippet)] for every raw DOM edit in the video folder's scripts (subfolders too, not run output; a shared helper outside the folder is not read)."""
     hits = []
-    for f in sorted(Path(vdir).rglob("*.ts")):
+    root = Path(vdir)
+    for f in sorted(p for p in root.rglob("*") if p.suffix in SOURCE and p.is_file() and not OUTPUT & set(p.relative_to(root).parts)):
         for no, line in enumerate(strip_comments(f.read_text()).splitlines(), 1):
             for rule, rx in RULES:
                 m = re.search(rx, line)
