@@ -71,6 +71,14 @@ Composite every frame in Python/OpenCV at 1920x1080 30 fps, pipe to ffmpeg (libx
 - Loudness ~-16 LUFS (`ffmpeg -i out.mp4 -af ebur128 -f null -`).
 - Independent reviewer (another agent/model) checks frames and transcript. Fix, re-review.
 
+## Independent review (four lenses, run in parallel)
+Four fresh agents (`fable` or `opus`), one lens each, none of them the agent that made the cut. Inputs for all: the review frames and their `index.json`, the contact sheet, `edit.json`, `gate.json`, the final transcript, the UI dump from step 1. Each returns findings only, as `lens | scene/time | severity (block, fix, nit) | what | proposed fix`. No lens edits the cut.
+- **Design/layout.** Subtitles and callouts clear of the action and of named labels; zoom moves smooth, no pumping; nothing cropped or off-centre; cards and overlays match the theme; transitions clean; no dead frames.
+- **Text/readability.** Every subtitle, callout and card line readable at 720p (18 px minimum at that height); product UI text that stays small and unzoomed while the line talks about it; labels quoted as rendered; spelling; the language register (formal vs spoken, natural speech, not translated) for the narration language.
+- **Pacing/narrative.** Against the storyboard rules above: opens on the viewer's problem, product visible within 3 s, most screen time on the one moment only this product delivers, ends on one headline plus the CTA. Dead air, rushed lines, scenes that repeat a point, a hold on a loading or empty state.
+- **Brand vs real product.** Frames against the step 1 UI dump and the product's own site: names, labels, tagline, colours, logo, fonts, plan names, claims. Anything shown that the product does not do or does not say.
+Merge: one list, duplicates joined (keep the highest severity and every lens that raised it), ordered block, fix, nit, then grouped by the action each needs (re-edit, re-record with `SCENES=`, re-voice). Fix, then re-run only the lenses that had findings, on the new frames.
+
 ## Known traps
 - ffmpeg `tpad` after `trim` on webm does not lengthen the clip; use `loop` to hold a frame.
 - Clicks where audio segments join: build one mixed voice track.
