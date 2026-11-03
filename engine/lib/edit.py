@@ -144,6 +144,15 @@ def build_camera(events, zcfg, zmax_default, zmin):
     return use, K, returns
 
 
+def cut_clip_times(cuts):
+    """Clip time at which each cut starts. A clip log keeps its cuts in wall seconds, and clip time skips the cuts before it."""
+    out, gone = [], 0.0
+    for a, b in sorted(cuts):
+        out.append(a - gone)
+        gone += b - a
+    return out
+
+
 def cam_at(K, t):
     if t <= K[0][0]:
         return K[0][1:]
@@ -357,6 +366,7 @@ def main():
         it["groups"], it["K"], it["returns"] = build_camera(it["log"]["events"], zc, zcfg.get("max", 1.75), ZMIN)
         P = np.array(it["log"]["path"], dtype=np.float64) if it["log"]["path"] else np.zeros((0, 3))
         it["P"] = P
+        it["cut_ct"] = cut_clip_times(it["log"].get("cuts", []))
 
     # -- zoom stability: one cycle = the camera zooms in and is back at the full view. A clip that ends zoomed cycles at its end,
     # where the crossfade returns to the full view of the next scene.
@@ -568,7 +578,8 @@ def main():
                     blend(img, pointer, int(round(ox)) - hot[0], int(round(oy)) - hot[1], a)
         for tp, x, y in presses:
             u = (ct - tp) / 0.5
-            if 0 <= u <= 1:
+            end = min([tp + 0.5] + [c for c in it["cut_ct"] if c >= tp - 0.02])  # a cut follows the click: the ripple must not land on the next page
+            if 0 <= u <= 1 and ct < end:
                 ox, oy = css_to_out(x, y, win)
                 r = int((8 + 34 * (1 - (1 - u) ** 3)) * K_SCALE)
                 ov_ = img.copy()

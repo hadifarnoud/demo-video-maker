@@ -291,6 +291,10 @@ Found while comparing with similar tools (2026-11):
     (`box.sh run <v> gif`) cuts a clip from `out/<name>-nosubs.mp4` (or `<name>.mp4` with `--subs`) with the image's ffmpeg: fps, scale, a palette from the clip, loop, no audio. Default
     8 s, 720 wide, 12 fps. Tried: 6 s of the 01-tour cut at 720x405 12 fps = 1.2 MB; on the box image a 3 s test clip at 480 wide ran. Size is not capped: check it against the platform's limit.
 
+50. **The click ripple ends at the cut.** The ripple lasts 0.5 s from the press. After `click(..., {cut: true})` the next frames are the next page at the same clip
+    time, so the ripple was drawn over an unrelated control (01-tour at 1:51, 2:02 and 2:58). `edit.py` converts each clip's `cuts` (wall seconds) to clip time with
+    `cut_clip_times` and ends a ripple at the first cut that starts at or after its press. A click that cuts shows no ripple (the cut starts at the press).
+
 ## Known limits
 
 - Capture is ~20-25 fps on test_vps (software rendering at 2x). The pointer and ripple are drawn from logs at 30 fps, so
