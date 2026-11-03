@@ -3,7 +3,7 @@
 
   uv run lib/gate.py <video> [--no-stt]
 
-Writes out/<name>.gate.json and the contact sheet out/<name>.contact.jpg.
+Writes out/<name>.gate.json, the contact sheet out/<name>.contact.jpg and the review frames out/<name>.review/.
 Exit code 0 only when every check passes. The independent human/agent review of frames and
 transcript stays manual (see README).
 """
@@ -244,9 +244,14 @@ def main():
     if subs_mp4.exists():
         sheet = out / f"{name}.contact.jpg"
         subprocess.run([str(ROOT / "lib/record/grid.sh"), str(subs_mp4), str(sheet), "1.5"], check=True, capture_output=True)
+    review = None
+    if subs_mp4.exists() and edit:  # ~20 frames at peak moments and transitions for the independent reviewers (an aid, not a check)
+        r = subprocess.run([sys.executable, str(ROOT / "lib/frames.py"), str(vdir)], capture_output=True, text=True)
+        print(r.stdout.strip() or ("review frames failed: " + r.stderr.strip()[-200:]))
+        review = f"out/{name}.review" if r.returncode == 0 else None
 
     ok = all(c["ok"] for c in checks)
-    (out / f"{name}.gate.json").write_text(json.dumps(dict(video=name, ok=ok, checks=checks, contact_sheet=str(sheet.relative_to(vdir)) if sheet else None), indent=1))
+    (out / f"{name}.gate.json").write_text(json.dumps(dict(video=name, ok=ok, checks=checks, contact_sheet=str(sheet.relative_to(vdir)) if sheet else None, review_frames=review), indent=1))
     print("GATE", "PASS" if ok else "FAIL")
     sys.exit(0 if ok else 1)
 
