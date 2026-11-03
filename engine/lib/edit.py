@@ -264,7 +264,7 @@ def write_sidecars(subs, path_stem):
     for i, s in enumerate(subs, 1):
         text = cue_text(s["parts"])
         srt += [str(i), f"{stamp(s['t0'], ',')} --> {stamp(s['t1'], ',')}", text, ""]
-        vtt += [f"{stamp(s['t0'], '.')} --> {stamp(s['t1'], '.')}", text, ""]
+        vtt += [f"{stamp(s['t0'], '.')} --> {stamp(s['t1'], '.')}", text.replace("&", "&amp;").replace("<", "&lt;"), ""]  # a raw & or < is markup in WebVTT
     a, b = Path(str(path_stem) + ".srt"), Path(str(path_stem) + ".vtt")
     a.write_text("\n".join(srt))
     b.write_text("\n".join(vtt))
