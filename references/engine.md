@@ -92,16 +92,16 @@ along). `DEMO_ENTRY_URL` and `DEMO_LOGIN_URL` still work and come after it in th
 `output`; `voice` (`model_id`, `voice_id`, `language_code`, `stability`, `similarity_boost`, `tags`, `takes`, `stt_model`);
 `fonts` (families that must be loaded on the page, e.g. `["Bricolage Grotesque"]`; matched against `document.fonts`);
 `intro_card` / `outro_card` (seconds, 0 = none); `cards` (`brand`, `intro`/`outro` with `title`, `subtitle`, `url`);
-`card_scenes` (`{"4": {"title", "subtitle", "seconds"}}`: a narrated scene shown as a card); `zoom` (`max`, `min`,
+`card_scenes` (`{"4": {"title", "subtitle", "seconds"}}`: a narrated scene shown as a card); `zoom` (`max`, `min`, `stay`,
 per scene `{"3": {"off": true}}`); `music` (`prompt`, `seconds`, `gain_db`, `duck_db`); `pacing` (`voice_at`, `tail`, `gap`,
 `crossfade`); `subtitles` (`{"default": "bottom", "3": "top"}`; otherwise bottom, or top when the action is down there); `subtitle_top_margin` (`{"2": 120}`: px from the top of the 1080 frame for a top subtitle in that scene, to sit below a site nav bar);
 `redscan` (`{"allow": {"3": {"frac": 0.03, "why": "..."}}}`: documented per-scene allowance, see "Changes to the method" 17); `theme` (card/overlay CSS variables); `secrets` (`{"allow": [{"pattern", "why"}]}`: known demo values the secret scan lets through); `calm_css` (CSS injected in every page to show steps still being set up in a neutral
-colour); `max_seconds`; `gate` (`stt_min`, `lufs_tol`, `max_pan`, `max_zoom_rate`, `min_capture_fps`).
+colour); `max_seconds`; `gate` (`stt_min`, `lufs_tol`, `max_pan`, `max_zoom_rate`, `max_zoom_cycles`, `zoom_window_s`, `label_cover_frac`, `min_capture_fps`).
 
 ## Gate (`lib/gate.py`)
 
 Automated: output shape (1920x1080, 30 fps, audio), duration limit, every `«label»` of the narration was found on screen,
-no late cue, pre-flight clean, no secret on screen or in the logs, no raw DOM edit in the spec (declared ones are listed), steady capture rate, red-state scan, camera speed, subtitles never cover an action or a named label (geometry and a pixel diff),
+no late cue, pre-flight clean, no secret on screen or in the logs, no raw DOM edit in the spec (declared ones are listed), steady capture rate, red-state scan, camera speed and zoom cycles, subtitles never cover an action or a named label (geometry and a pixel diff),
 music covers the video, loudness -16 LUFS +-1, STT of the final mix vs `narration.txt`. Writes `out/<name>.gate.json` and
 `out/<name>.contact.jpg` (1 frame / 1.5 s). Still manual: an independent reviewer looks at the contact sheet and
 transcript, including the zoom moves and the subtitle placement.
@@ -232,6 +232,14 @@ Found while comparing with similar tools (2026-11):
     fine). `box.sh record` refuses a spec that fails it, `drift` prints it, and the gate fails it and lists the declared edits
     for the reviewer. Migrating an old spec: replace the raw `evaluate` with the matching helper call. A spec that cannot be
     expressed this way is a sign the video shows something the product does not.
+
+42. **Zoom stability.** The gate only checked how fast the camera moves, never how often. Targets 2.5 to 4 s apart each got a full
+    zoom in and out (the camera went back to the full view whenever the next target was more than ~2 s away), which reads as
+    pumping. Now the camera stays zoomed and pans when the next target comes within `zoom.stay` seconds (default 4.5) of the last one. (4.0 left a 3-cycle window in the real 01-tour, a 4.2 s gap between two targets; 4.5 gives 2.)
+    `edit.json` carries `zoom_cycles` and `zoom_travel` per scene (a cycle = in, hold, back to the full view; a clip that ends zoomed
+    cycles at its end, where the crossfade returns to the full view) and `zoom_cycle_times` on the timeline. The gate fails more
+    than `gate.max_zoom_cycles` (default 2) cycles in any `gate.zoom_window_s` (default 10) seconds. `zoom.stay: 0` brings back the
+    old pumping, which is how the check is tested. Older cuts can be re-gated after `edit --plan` or a re-edit.
 
 ## Known limits
 

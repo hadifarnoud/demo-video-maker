@@ -89,9 +89,12 @@ def zoom_for(b, pad=70):
 
 
 def build_camera(events, zcfg, zmax_default, zmin):
-    """-> (groups, keyframes). Keyframes: (t, cx, cy, z) in CSS px, eased with a cosine."""
+    """-> (groups, keyframes, returns). Keyframes: (t, cx, cy, z) in CSS px, eased with a cosine.
+    returns: the times the camera is back at the full view inside the clip; each is one zoom cycle (in, hold, out).
+    The camera stays zoomed and pans when the next target comes within zoom.stay seconds (default 4.5) of the last one."""
     if zcfg.get("off"):
-        return [], [(0.0, VW / 2, VH / 2, 1.0)]
+        return [], [(0.0, VW / 2, VH / 2, 1.0)], []
+    stay = zcfg.get("stay", 4.5)
     zmax = zcfg.get("max", zmax_default)
     LEAD, JOIN, HOLD_AFTER = 1.0, 2.2, 0.4
     groups = []
@@ -116,6 +119,7 @@ def build_camera(events, zcfg, zmax_default, zmin):
         use.append(g)
     base = (VW / 2, VH / 2, 1.0)
     K = [(0.0, *base)]
+    returns = []
     cur = base
 
     def move_time(a, b):
@@ -133,10 +137,11 @@ def build_camera(events, zcfg, zmax_default, zmin):
         cur = st
         out_d = move_time(cur, base)
         nxt = use[i + 1] if i + 1 < len(use) else None
-        if nxt is None or nxt["t0"] - LEAD > hold_end + out_d + 0.3:
+        if nxt is None or nxt["t0"] - g["t1"] > stay:
             K.append((hold_end + out_d, *base))
+            returns.append(hold_end + out_d)
             cur = base
-    return use, K
+    return use, K, returns
 
 
 def cam_at(K, t):
@@ -312,9 +317,18 @@ def main():
             continue
         n = it["n"]
         zc = {**{k: v for k, v in zcfg.items() if not k.isdigit()}, **zcfg.get(str(n), {})}
-        it["groups"], it["K"] = build_camera(it["log"]["events"], zc, zcfg.get("max", 1.75), ZMIN)
+        it["groups"], it["K"], it["returns"] = build_camera(it["log"]["events"], zc, zcfg.get("max", 1.75), ZMIN)
         P = np.array(it["log"]["path"], dtype=np.float64) if it["log"]["path"] else np.zeros((0, 3))
         it["P"] = P
+
+    # -- zoom stability: one cycle = the camera zooms in and is back at the full view. A clip that ends zoomed cycles at its end,
+    # where the crossfade returns to the full view of the next scene.
+    def zoom_stats(it):
+        travel = sum(abs(math.log(b[3] / a[3])) for a, b in zip(it["K"], it["K"][1:]))
+        times = [round(it["start"] + min(r, it["keep"]), 2) for r in it["returns"]]
+        return dict(cycles=len(times), travel=round(travel, 2), cycle_times=times)
+
+    zoom_cycle_times = sorted(t for it in items if it["kind"] == "scene" for t in zoom_stats(it)["cycle_times"])
 
     # -- subtitle chunks (timeline time)
     subs = []
@@ -486,7 +500,8 @@ def main():
 
     if plan_only:  # decisions only (subtitle positions, overlaps, zoom): no frames, no audio
         plan = dict(total=round(total, 3), subtitle_pos={k: v[0] for k, v in sub_pos.items()}, subtitle_overlaps={k: v[1] for k, v in sub_pos.items() if v[1]}, label_rects=label_rects,
-                    zoom={i["id"]: [(round(g["t0"], 2), round(g["z"], 2)) for g in i["groups"]] for i in items if i["kind"] == "scene"})
+                    zoom={i["id"]: [(round(g["t0"], 2), round(g["z"], 2)) for g in i["groups"]] for i in items if i["kind"] == "scene"},
+                    zoom_cycle_times=zoom_cycle_times)
         (vdir / "out" / f"{name}.plan.json").write_text(json.dumps(plan, indent=1))
         print(json.dumps({k: plan[k] for k in ("total", "subtitle_pos", "subtitle_overlaps")}))
         return
@@ -667,7 +682,8 @@ def main():
                     held_last_frame=bool(i["kind"] == "scene" and i["keep"] > i["log"]["duration"] + 0.02),
                     last_action=round(i["last_action"], 3) if i["kind"] == "scene" else None) for i in items],
         zoom={i["id"]: dict(groups=[dict(t0=round(g["t0"], 2), t1=round(g["t1"], 2), z=round(g["z"], 2), center=[round(v) for v in g["c"]]) for g in i["groups"]],
-                           max_pan_css_px_per_s=cam_speed(i)[0], max_zoom_log_per_s=cam_speed(i)[1]) for i in items if i["kind"] == "scene"},
+                           max_pan_css_px_per_s=cam_speed(i)[0], max_zoom_log_per_s=cam_speed(i)[1], **zoom_stats(i)) for i in items if i["kind"] == "scene"},
+        zoom_cycle_times=zoom_cycle_times,
         subtitles=[dict(id=s["id"], item=s["item"], t0=round(s["t0"], 2), t1=round(s["t1"], 2), pos=s["pos"], rect=[int(v) for v in s["rect"]], text="".join(p["s"] for p in s["parts"])) for s in subs],
         subtitle_overlaps={k: v[1] for k, v in sub_pos.items() if v[1]},
         subtitle_pos={k: v[0] for k, v in sub_pos.items()},

@@ -179,6 +179,12 @@ def main():
         worst_pan = max((z["max_pan_css_px_per_s"] for z in zs.values()), default=0)
         worst_z = max((z["max_zoom_log_per_s"] for z in zs.values()), default=0)
         add("camera moves are smooth", worst_pan <= gcfg.get("max_pan", 900) and worst_z <= gcfg.get("max_zoom_rate", 0.9), dict(pan_css_px_per_s=worst_pan, zoom_log_per_s=worst_z))
+        if "zoom_cycle_times" not in edit:
+            add("camera does not pump (zoom cycles per window)", False, "edit.json predates zoom cycles: run edit again")
+        else:
+            win, cap, ts = gcfg.get("zoom_window_s", 10), gcfg.get("max_zoom_cycles", 2), edit["zoom_cycle_times"]
+            worst = max(((sum(1 for u in ts if t <= u < t + win), t) for t in ts), default=(0, 0))
+            add("camera does not pump (zoom cycles per window)", worst[0] <= cap, dict(most_cycles_in_window=worst[0], window_s=win, at=worst[1], limit=cap, cycles=len(ts), zoom_travel=round(sum(z["travel"] for z in zs.values()), 2)))
         add("subtitles never cover the action", not edit["subtitle_overlaps"], edit["subtitle_overlaps"] or "ok")
         old = sorted(n for n, l in clips.items() if l.get("log_version", 1) < LOG_VERSION)
         add("clip logs are current", not old, dict(re_record=old, why="the log predates a check the gate relies on; re-recording costs no voice") if old else "ok")
