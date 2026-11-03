@@ -217,9 +217,20 @@ def main():
                 j = json.loads(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=codec_type,codec_name:stream_tags=language", "-show_chapters", "-of", "json", str(p)], capture_output=True, text=True, check=True).stdout) if p.exists() else {}
                 found[p.name] = dict(subtitle_tracks=[f"{s['codec_name']}:{s.get('tags', {}).get('language', '')}" for s in j.get("streams", []) if s["codec_type"] == "subtitle"], chapters=len(j.get("chapters", [])))
             want_ch = len(sc["chapters"])
-            ok = cues(sc["srt"]) == cues(sc["vtt"]) == len(edit["subtitles"]) and all(f["chapters"] == want_ch for f in found.values()) \
+            ok = cues(sc["srt"]) == cues(sc["vtt"]) == sc["cues"] <= len(edit["subtitles"]) and all(f["chapters"] == want_ch for f in found.values()) \
                 and found.get(nosubs_mp4.name, {}).get("subtitle_tracks") == [f"mov_text:{sc['language']}"]
             add("subtitle sidecars, soft track and chapters", ok, dict(srt_cues=cues(sc["srt"]), vtt_cues=cues(sc["vtt"]), burned_in_chunks=len(edit["subtitles"]), chapters=want_ch, files=found))
+            # the caption text: a cue breaks only at a clause mark (method.md), and every quoted label keeps its quote marks
+            if "cue_items" not in sc or "quotes" not in sc:
+                add("caption cues: clause breaks, quote marks", False, "edit.json predates the cue checks: run edit again")
+            elif (vdir / sc["srt"]).exists():
+                texts = [b.split("\n", 2)[2] for b in (vdir / sc["srt"]).read_text().strip().split("\n\n") if b.count("\n") >= 2]
+                q0, q1 = sc["quotes"]
+                clause = ",;:.!?\u2014\u2026\u060c\u061b\u061f"  # edit.py CLAUSE
+                mid = [i + 1 for i in range(len(texts) - 1) if sc["cue_items"][i] == sc["cue_items"][i + 1] and texts[i].rstrip().rstrip(q1)[-1:] not in clause]
+                want_q = sum(l.count("\u00ab") for l in lines)
+                got_q = sum(t.count(q0) for t in texts)
+                add("caption cues: clause breaks, quote marks", len(texts) == sc["cues"] and not mid and got_q == want_q, dict(cues=len(texts), breaks_mid_clause=mid, quoted_labels_in_narration=want_q, quoted_labels_in_cues=got_q))
         m = edit["audio"].get("music")
         if m:
             add("music bed covers the video", not m["shorter_than_video"], m)

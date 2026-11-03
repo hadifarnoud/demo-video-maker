@@ -251,10 +251,10 @@ Found while comparing with similar tools (2026-11):
     one-line fix. A text that looks like a secret is left out of the list. A pre-flight failure and any other error in a scene save the same PNG. `box.sh fetch` brings `fail-*.png` back.
 
 44. **Captions as text, a soft track and chapters.** The subtitle chunks existed only as burned-in pixels. `edit.py` now writes
-    `out/<name>.srt` and `.vtt` (one cue per chunk, same times; isolates dropped), muxes the text as a `mov_text` track into the
+    `out/<name>.srt` and `.vtt` (see 52 for how the cues are cut), muxes the text as a `mov_text` track into the
     `-nosubs.mp4` (off by default, so a viewer can turn captions on without the burned-in ones; language from `voice.language_code`),
     and writes one chapter per item (card or scene title, from `scene(n, 'Title')`) into both mp4s. The gate compares the cue counts
-    with the chunks and reads the track and chapters back with ffprobe. `--preview` writes none of the sidecars.
+    with `edit.json` and reads the track and chapters back with ffprobe. `--preview` writes none of the sidecars.
 
 45. **`drift --shots`.** Wrong framing, a target that moved or a label in the wrong place showed only after a full record. A drift
     run with `--shots` saves `drift-shots/scene-NN-SS-<kind>.png` for every click, hover, look, typed field and checked label, with its
@@ -298,6 +298,14 @@ Found while comparing with similar tools (2026-11):
 51. **Subtitle plate at 92 % ink.** At 74 % a black page headline showed through behind the white subtitle text (01-tour at 4:07 to 4:09): behind a plate, black
     against white changes its colour by 26 % of the difference (66 of 255 levels); at 92 % it is 8 % (20 levels). The overlay cache key `renderer` is now 3, so a
     cut made before re-renders its subtitles.
+
+52. **Caption cues cut per clause, with their quote marks.** The cues were one per burned-in chunk, and the chunker also splits a clause longer than 66
+    characters at a space, so a caption cue could end mid-clause (01-tour cues 1, 52, 58: "...a few people who" / "just know..."). It also dropped the « » of a named label,
+    so a cue read "and Fill the gaps starts the next interview" (cues 74, 79, 80). `chunk_line` marks each chunk `hard` when its start is a clause break; `build_cues`
+    joins a chunk that is not `hard` to the cue before it, on a new line, so a cue starts only at a clause mark (method.md: break only at clause marks outside quoted
+    labels). A label keeps quote marks in the cue text: curly “ ” for `en`, the narration's own « » for other languages. 01-tour: 99 chunks, 95 cues, 20 quoted labels
+    in the narration and 20 in the cues. `edit.json` `sidecars` carries `cues`, `cue_items` and `quotes`; the gate item "caption cues: clause breaks, quote marks"
+    fails a cue that ends inside a clause (the next cue is in the same scene and its text does not end in a clause mark) and a quoted-label count that differs from the narration.
 
 ## Known limits
 

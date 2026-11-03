@@ -204,6 +204,7 @@ def chunk_line(text, starts, ends, maxlen=66):
             cuts.append(i + 1)
     cuts.append(len(text))
     cuts = sorted(set(cuts))
+    hard = set(cuts)  # breaks at a clause mark; split_long adds others, which the burned-in text may use but the caption cues may not
     spans = [(a, b) for a, b in zip(cuts, cuts[1:]) if text[a:b].strip()]
 
     def disp_len(a, b):
@@ -244,7 +245,7 @@ def chunk_line(text, starts, ends, maxlen=66):
         parts[0]["s"] = parts[0]["s"].lstrip() if parts[0]["t"] == "text" else parts[0]["s"]
         if parts[-1]["t"] == "text":
             parts[-1]["s"] = parts[-1]["s"].rstrip()
-        out.append({"t0": starts[idx[0]], "t1": ends[idx[-1]], "parts": parts, "rtl": bool(re.search(r"[؀-ۿ]", seg))})
+        out.append({"t0": starts[idx[0]], "t1": ends[idx[-1]], "parts": parts, "rtl": bool(re.search(r"[؀-ۿ]", seg)), "hard": a in hard})
     for i, c in enumerate(out):
         nxt = out[i + 1]["t0"] if i + 1 < len(out) else None
         c["t0"] = max(0.0, c["t0"] - 0.08)
@@ -262,18 +263,37 @@ def stamp(t, sep):
     return f"{ms // 3600000:02d}:{ms // 60000 % 60:02d}:{ms // 1000 % 60:02d}{sep}{ms % 1000:03d}"
 
 
-def cue_text(parts):
-    """Plain subtitle text: the label marks and any bidi isolates are dropped (a player lays RTL out itself)."""
-    return re.sub("[\u2066-\u2069]", "", "".join(p["s"] for p in parts)).strip()
+QUOTES = {"en": ("\u201c", "\u201d")}  # a label «like this» in the narration; other languages keep the narration's own « »
+GUILLEMETS = ("\u00ab", "\u00bb")
 
 
-def write_sidecars(subs, path_stem):
-    """-> (srt path, vtt path). One cue per burned-in chunk, same times."""
+def cue_text(parts, quotes=GUILLEMETS):
+    """Plain caption text: a label keeps its quote marks (the burned-in text highlights it instead), and any bidi isolates are dropped (a player lays RTL out itself)."""
+    q0, q1 = quotes
+    return re.sub("[\u2066-\u2069]", "", "".join(f"{q0}{p['s']}{q1}" if p["t"] == "label" else p["s"] for p in parts)).strip()
+
+
+def build_cues(subs, quotes):
+    """One caption cue per clause, not per burned-in chunk: a chunk that split a long clause at a space joins the cue before it
+    (on a new line), so a cue never breaks mid-clause (method.md: break only at clause marks outside quoted labels).
+    -> [{item, t0, t1, text}]"""
+    cues = []
+    for s in subs:
+        text = cue_text(s["parts"], quotes)
+        if cues and not s.get("hard", True) and cues[-1]["item"] == s["item"]:
+            cues[-1]["t1"] = s["t1"]
+            cues[-1]["text"] += "\n" + text
+        else:
+            cues.append(dict(item=s["item"], t0=s["t0"], t1=s["t1"], text=text))
+    return cues
+
+
+def write_sidecars(cues, path_stem):
+    """-> (srt path, vtt path)."""
     srt, vtt = [], ["WEBVTT", ""]
-    for i, s in enumerate(subs, 1):
-        text = cue_text(s["parts"])
-        srt += [str(i), f"{stamp(s['t0'], ',')} --> {stamp(s['t1'], ',')}", text, ""]
-        vtt += [f"{stamp(s['t0'], '.')} --> {stamp(s['t1'], '.')}", text.replace("&", "&amp;").replace("<", "&lt;"), ""]  # a raw & or < is markup in WebVTT
+    for i, c in enumerate(cues, 1):
+        srt += [str(i), f"{stamp(c['t0'], ',')} --> {stamp(c['t1'], ',')}", c["text"], ""]
+        vtt += [f"{stamp(c['t0'], '.')} --> {stamp(c['t1'], '.')}", c["text"].replace("&", "&amp;").replace("<", "&lt;"), ""]  # a raw & or < is markup in WebVTT
     a, b = Path(str(path_stem) + ".srt"), Path(str(path_stem) + ".vtt")
     a.write_text("\n".join(srt))
     b.write_text("\n".join(vtt))
@@ -721,8 +741,10 @@ def main():
     meta.write_text(chapter_meta(chapters, total))
     lang3 = LANG3.get(str(cfg.get("voice", {}).get("language_code", "")).split("-")[0], "und")
     srt = vtt = None
+    quotes = QUOTES.get(str(cfg.get("voice", {}).get("language_code", "")).split("-")[0], GUILLEMETS)
+    cues = build_cues(subs, quotes)
     if not preview:
-        srt, vtt = write_sidecars(subs, vdir / "out" / name)
+        srt, vtt = write_sidecars(cues, vdir / "out" / name)
 
     outs = {}
     for label, vid, fname in ([("nosubs", v_nosubs, f"{name}-nosubs.mp4")] if not preview else []) + [("subs", v_subs, f"{name}{tag}.mp4")]:
@@ -758,7 +780,7 @@ def main():
         text_px=index.get("text_px"),
         callouts={i["id"]: i["callouts_placed"] for i in items if i["kind"] == "scene" and i["callouts_placed"]},
         audio=dict(measured=meas, music=music_info), outputs=outs,
-        sidecars=dict(srt=str(srt.relative_to(vdir)), vtt=str(vtt.relative_to(vdir)), cues=len(subs), soft_track_in="nosubs" if srt else None, language=lang3, chapters=[dict(start=round(t0, 3), title=ti) for t0, ti in chapters]) if srt else dict(chapters=[dict(start=round(t0, 3), title=ti) for t0, ti in chapters]),
+        sidecars=dict(srt=str(srt.relative_to(vdir)), vtt=str(vtt.relative_to(vdir)), cues=len(cues), cue_items=[c["item"] for c in cues], quotes=list(quotes), soft_track_in="nosubs" if srt else None, language=lang3, chapters=[dict(start=round(t0, 3), title=ti) for t0, ti in chapters]) if srt else dict(chapters=[dict(start=round(t0, 3), title=ti) for t0, ti in chapters]),
     )
     (vdir / "out" / f"{name}{tag}.edit.json").write_text(json.dumps(edit, indent=1))
     print(json.dumps(outs), f"total {total:.1f}s")
