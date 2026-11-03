@@ -153,7 +153,7 @@ Found while recording 01-tour (the first run on the demo-mode app):
     ranges of the final video and passes them to `redscan.sh` (`RED_ALLOW`), where frames up to `frac` red are counted as
     "allowed" and listed. Used by 01-tour scene 14 only (Analytics: bus-factor bar and "Only holder" badges, 1.4 % of the frame at most; the limit is 3 % there). Anything larger (a red toast, an alert banner, a validation block) still fails, and every other
     scene keeps the 0.4 % limit.
-18. **Subtitles.** 46 px on a calm translucent plate (74 % ink, slight blur), up to 66 characters per chunk, bottom unless the
+18. **Subtitles.** 46 px on a calm translucent plate (92 % ink, slight blur), up to 66 characters per chunk, bottom unless the
     action is there. A label longer than the plate wraps instead of running off the frame (RTL labels still never wrap).
 19. **Voice recheck** accepts a one-letter STT spelling difference in a long spoken label (`Rajaee` heard as `Rajaie`).
 20. **Box load.** The test box is shared (Go builds of other projects run on it at load 10-15), which dropped the screencast to
@@ -294,6 +294,10 @@ Found while comparing with similar tools (2026-11):
 50. **The click ripple ends at the cut.** The ripple lasts 0.5 s from the press. After `click(..., {cut: true})` the next frames are the next page at the same clip
     time, so the ripple was drawn over an unrelated control (01-tour at 1:51, 2:02 and 2:58). `edit.py` converts each clip's `cuts` (wall seconds) to clip time with
     `cut_clip_times` and ends a ripple at the first cut that starts at or after its press. A click that cuts shows no ripple (the cut starts at the press).
+
+51. **Subtitle plate at 92 % ink.** At 74 % a black page headline showed through behind the white subtitle text (01-tour at 4:07 to 4:09): behind a plate, black
+    against white changes its colour by 26 % of the difference (66 of 255 levels); at 92 % it is 8 % (20 levels). The overlay cache key `renderer` is now 3, so a
+    cut made before re-renders its subtitles.
 
 ## Known limits
 
