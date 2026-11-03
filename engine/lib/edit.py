@@ -404,7 +404,7 @@ def main():
         if not v:
             continue
         for c in chunk_line(v["text"], v["starts"], v["ends"]):
-            subs.append(dict(item=it["id"], n=it.get("n"), t0=it["start"] + it["voice_at"] + c["t0"], t1=it["start"] + it["voice_at"] + c["t1"], parts=c["parts"], rtl=c["rtl"]))
+            subs.append(dict(item=it["id"], n=it.get("n"), t0=it["start"] + it["voice_at"] + c["t0"], t1=it["start"] + it["voice_at"] + c["t1"], parts=c["parts"], rtl=c["rtl"], hard=c["hard"]))
     for i, s in enumerate(subs):
         s["id"] = f"sub{i:03d}"
 
