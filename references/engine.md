@@ -94,13 +94,13 @@ along). `DEMO_ENTRY_URL` and `DEMO_LOGIN_URL` still work and come after it in th
 `card_scenes` (`{"4": {"title", "subtitle", "seconds"}}`: a narrated scene shown as a card); `zoom` (`max`, `min`,
 per scene `{"3": {"off": true}}`); `music` (`prompt`, `seconds`, `gain_db`, `duck_db`); `pacing` (`voice_at`, `tail`, `gap`,
 `crossfade`); `subtitles` (`{"default": "bottom", "3": "top"}`; otherwise bottom, or top when the action is down there); `subtitle_top_margin` (`{"2": 120}`: px from the top of the 1080 frame for a top subtitle in that scene, to sit below a site nav bar);
-`redscan` (`{"allow": {"3": {"frac": 0.03, "why": "..."}}}`: documented per-scene allowance, see "Changes to the method" 17); `theme` (card/overlay CSS variables); `calm_css` (CSS injected in every page to show steps still being set up in a neutral
+`redscan` (`{"allow": {"3": {"frac": 0.03, "why": "..."}}}`: documented per-scene allowance, see "Changes to the method" 17); `theme` (card/overlay CSS variables); `secrets` (`{"allow": [{"pattern", "why"}]}`: known demo values the secret scan lets through); `calm_css` (CSS injected in every page to show steps still being set up in a neutral
 colour); `max_seconds`; `gate` (`stt_min`, `lufs_tol`, `max_pan`, `max_zoom_rate`, `min_capture_fps`).
 
 ## Gate (`lib/gate.py`)
 
 Automated: output shape (1920x1080, 30 fps, audio), duration limit, every `«label»` of the narration was found on screen,
-no late cue, pre-flight clean, steady capture rate, red-state scan, camera speed, subtitles never cover an action or a named label (geometry and a pixel diff),
+no late cue, pre-flight clean, no secret on screen or in the logs, steady capture rate, red-state scan, camera speed, subtitles never cover an action or a named label (geometry and a pixel diff),
 music covers the video, loudness -16 LUFS +-1, STT of the final mix vs `narration.txt`. Writes `out/<name>.gate.json` and
 `out/<name>.contact.jpg` (1 frame / 1.5 s). Still manual: an independent reviewer looks at the contact sheet and
 transcript, including the zoom moves and the subtitle placement.
@@ -209,7 +209,18 @@ Found while comparing with similar tools (2026-11):
     each `«label»` the line names; `edit.py` keeps subtitles off it (it is not a camera target) and writes `label_rects` to
     `edit.json`. The gate then compares the picture with and without subtitles inside each box (`gate.label_cover_frac`, default
     0.02 of the pixels) and fails a subtitle that covers it. That check does not use the edit's geometry, so a bug in it cannot hide a
-    cover. Clip logs carry `log_version: 2`; the gate fails an older log, so re-record it (no voice spend).
+    cover. Clip logs carry a `log_version`; the gate fails an older log, so re-record it (no voice spend).
+
+40. **Secret scan, after every action.** The pre-flight only tested the dev-origin regex, and only at the start and end of a clip, so a
+    token that appeared mid-scene passed. `secretFind` (in the page) now runs at the start and end, after every click, hover, look,
+    scroll, callout and typed text (the text is scanned before it is typed), and about once a second while waiting for a cue. It reads
+    visible text, input and textarea values (read-only too; a password field shows dots and is skipped), `placeholder`, `title`,
+    `aria-label`, `alt`, `value`, `href` and `src` (patterns only), open shadow roots, same-origin iframes, the URL and the title.
+    The rules are in `lib/secret-patterns.json` (JWT, `sk_`, `ghp_`, `xox`, `AKIA`, `Bearer`, `?token=` style values, private keys, and a
+    24+ character run with three character classes and high entropy; slugs and UUIDs pass). A hit fails the take and names the kind
+    and the field, never the value (`clips/secret-hits.json`). `gate.py` runs the same rules over the clip logs, labels, narration and
+    subtitles. A known demo value goes in `video.json` `secrets.allow` (`{"pattern": regex tested against the match, "why": reason}`);
+    a reason is required and the gate prints it.
 
 ## Known limits
 

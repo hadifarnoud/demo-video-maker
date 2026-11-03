@@ -19,6 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
 LABEL_RE = re.compile(r"«([^»]+)»")
+LOG_VERSION = 3  # clip log format written by lib/record/demo.ts; an older log lacks checks the gate relies on
 
 
 def norm(s):
@@ -137,6 +138,22 @@ def main():
     add("preflight clean (fonts loaded, no error toast/alert/spinner)", not pre, pre or "ok")
     add("screencast kept a steady rate", not slow, slow or "ok")
 
+    # secrets: what the recorder saw on screen, and a second look at every text the run wrote down
+    from secrets_scan import kinds_in, load_allow, scan_json
+
+    allow = load_allow(cfg)
+    texts = [(f"clips/scene-{n:02d}.json", scan_json({k: log.get(k) for k in ("events", "dom_edits", "preflight")}, allow)) for n, log in clips.items()]
+    texts.append(("clips/labels.json", scan_json(seen, allow)))
+    texts.append(("narration.txt", [(f"line {i}", k) for i, l in enumerate(lines, 1) for k in kinds_in(l, allow)]))
+    if edit:
+        texts.append((f"out/{name}.edit.json", scan_json(edit.get("subtitles", []), allow, "subtitles")))
+    leaks = [dict(file=f, where=w, kind=k) for f, hs in texts for w, k in hs]
+    hf = vdir / "clips" / "secret-hits.json"
+    for n, h in (json.loads(hf.read_text()) if hf.exists() else {}).items():
+        leaks += [dict(file="clips/secret-hits.json", where=f"scene {n}: {x['field']}", kind=x["kind"]) for x in h["hits"]]
+    scans = sum(log.get("secrets", {}).get("scans", 0) for log in clips.values())
+    add("no secret on screen or in the logs", not leaks, leaks or dict(recorder_scans=scans, allowed=[a["why"] for a in (cfg.get("secrets") or {}).get("allow", [])]))
+
     # 7. red-state scan of the final picture
     if nosubs_mp4.exists():
         # documented allowances (video.json redscan.allow: {"<scene>": {"frac", "why"}}): intentional red product UI
@@ -156,8 +173,8 @@ def main():
         worst_z = max((z["max_zoom_log_per_s"] for z in zs.values()), default=0)
         add("camera moves are smooth", worst_pan <= gcfg.get("max_pan", 900) and worst_z <= gcfg.get("max_zoom_rate", 0.9), dict(pan_css_px_per_s=worst_pan, zoom_log_per_s=worst_z))
         add("subtitles never cover the action", not edit["subtitle_overlaps"], edit["subtitle_overlaps"] or "ok")
-        old = sorted(n for n, l in clips.items() if l.get("log_version", 1) < 2)
-        add("clip logs record named labels", not old, dict(re_record=old) if old else "ok")
+        old = sorted(n for n, l in clips.items() if l.get("log_version", 1) < LOG_VERSION)
+        add("clip logs are current", not old, dict(re_record=old, why="the log predates a check the gate relies on; re-recording costs no voice") if old else "ok")
         if "label_rects" not in edit:
             add("named labels not covered by a subtitle (pixel diff)", False, "edit.json predates label boxes: run edit again")
         elif subs_mp4.exists() and nosubs_mp4.exists() and edit.get("size") == [1920, 1080]:

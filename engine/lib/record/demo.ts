@@ -23,6 +23,7 @@ const VIEW = { w: 1280, h: 720 };
 const FRAME = { w: 2560, h: 1440 };
 const LATE_LIMIT = 0.35; // s; a later landing than this fails the quality gate
 const HOVER_DWELL = 0.06; // pointer settles on the target this long before the cue
+const SECRET_CFG: SecretCfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'secret-patterns.json'), 'utf8'));
 const DRY = process.env.DEMO_DRY === '1'; // drift check: run every step and label against the live app, film nothing
 
 export type Cue = { on?: string; nth?: number; at?: 'start' | 'end' | number };
@@ -105,6 +106,72 @@ function labelFind(arg: { root: Element | null; src: string }): Rect | null {
   return best;
 }
 
+
+type SecretCfg = { patterns: { kind: string; re: string }[]; entropy: { run: string; min_len: number; min_bits: number; min_classes: number; hex_min_len: number; hex_min_bits: number } };
+
+/** Runs in the page: what looks like a secret on screen? Visible text, input and textarea values (read-only too; a password field
+ *  shows dots and is skipped), placeholder/title/aria-label/alt/value attributes, href and src (patterns only), open shadow roots,
+ *  same-origin iframes, the URL and the title. Returns kind and field only: the matched text never leaves the page. Self-contained. */
+function secretFind(arg: { cfg: SecretCfg; allow: string[]; masked: string[]; extra: { field: string; value: string }[] }): { kind: string; field: string }[] {
+  const pats = arg.cfg.patterns.map((p) => ({ kind: p.kind, re: new RegExp(p.re, 'g') }));
+  const allow = arg.allow.map((a) => new RegExp(a));
+  const en = arg.cfg.entropy;
+  const bits = (x: string) => {
+    const m = new Map<string, number>();
+    for (const c of x) m.set(c, (m.get(c) ?? 0) + 1);
+    let h = 0;
+    for (const n of m.values()) h -= (n / x.length) * Math.log2(n / x.length);
+    return h;
+  };
+  const out: { kind: string; field: string }[] = [];
+  const seen = new Set<string>();
+  const hit = (kind: string, field: string, frag: string) => {
+    if (allow.some((a) => a.test(frag))) return;
+    if (!seen.has(kind + '|' + field)) { seen.add(kind + '|' + field); out.push({ kind, field }); }
+  };
+  const test = (value: string, field: string, entropy = true) => {
+    if (!value || value.length < 8) return;
+    for (const p of pats) for (const m of value.matchAll(p.re)) hit(p.kind, field, m[0]);
+    if (!entropy) return;
+    for (const m of value.matchAll(new RegExp(en.run, 'g'))) {
+      const r = m[0];
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(r)) continue;
+      const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[_+=]/].filter((c) => c.test(r)).length;
+      if (r.length >= en.min_len && classes >= en.min_classes && bits(r) >= en.min_bits) hit('high-entropy', field, r);
+      else if (/^[0-9a-f]+$/i.test(r) && r.length >= en.hex_min_len && bits(r) >= en.hex_min_bits) hit('hex-run', field, r);
+    }
+  };
+  const desc = (e: Element) => {
+    const nm = e.getAttribute('name') ?? e.getAttribute('data-demo');
+    return e.tagName.toLowerCase() + (e.id ? '#' + e.id : '') + (nm ? `[${nm}]` : '');
+  };
+  const masked = (e: Element) => arg.masked.some((q) => { try { return e.closest(q) !== null; } catch { return false; } });
+  const skipTag = new Set(['SCRIPT', 'STYLE', 'NOSCRIPT', 'TEMPLATE']);
+  const walk = (root: Document | ShadowRoot, pre: string) => {
+    for (const e of Array.from(root.querySelectorAll('*'))) {
+      if (e.shadowRoot) walk(e.shadowRoot, pre + desc(e) + '>>');
+      if (e.tagName === 'IFRAME') {
+        try { const d = (e as HTMLIFrameElement).contentDocument; if (d) walk(d, pre + desc(e) + '>>'); } catch { /* cross-origin */ }
+      }
+      if (skipTag.has(e.tagName)) continue;
+      const r = e.getBoundingClientRect();
+      const win = e.ownerDocument.defaultView ?? window;
+      const cs = win.getComputedStyle(e);
+      if (r.width <= 0 || r.height <= 0 || cs.visibility === 'hidden' || cs.display === 'none' || masked(e)) continue;
+      const f = pre + desc(e);
+      for (const n of Array.from(e.childNodes)) if (n.nodeType === 3) test(n.textContent ?? '', f);
+      if ((e.tagName === 'INPUT' && (e as HTMLInputElement).type !== 'password') || e.tagName === 'TEXTAREA') test((e as HTMLInputElement).value, f + '@value');
+      for (const a of ['placeholder', 'title', 'aria-label', 'alt', 'value']) test(e.getAttribute(a) ?? '', f + '@' + a);
+      for (const a of ['href', 'src']) test(e.getAttribute(a) ?? '', f + '@' + a, false);
+    }
+  };
+  walk(document, '');
+  test(location.href, 'location.href', false);
+  test(document.title, 'document.title');
+  for (const x of arg.extra) test(x.value, x.field);
+  return out;
+}
+
 export class Scene {
   readonly page: Page;
   readonly n: number;
@@ -125,6 +192,11 @@ export class Scene {
   private late: { kind: string; cue: string; by: number }[] = [];
   private checked = new Set<string>();
   private preflightLog: { when: string; ok: boolean; problems: string[] }[] = [];
+  private secretAllow: { pattern: string; why: string }[] = [];
+  private maskedSelectors: string[] = [];
+  private scans = 0;
+  private lastScan = 0;
+  private reported = new Set<string>();
   private pointer = { x: 1040, y: 640 };
   private side = 1;
   private done = false;
@@ -137,6 +209,11 @@ export class Scene {
     const cfg = videoCfg();
     this.voiceAt = cfg.pacing?.voice_at ?? 0.5;
     this.fonts = cfg.fonts ?? [];
+    this.secretAllow = cfg.secrets?.allow ?? [];
+    for (const a of this.secretAllow) {
+      if (!a.pattern || !a.why) throw new Error('video.json secrets.allow: every entry needs a pattern and a why');
+      new RegExp(a.pattern);
+    }
     this.framesDir = path.join(VDIR, 'work', `frames-${String(n).padStart(2, '0')}`);
     const vp = path.join(VDIR, 'audio', `scene-${String(n).padStart(2, '0')}.json`);
     if (fs.existsSync(vp)) this.voice = readJson(vp);
@@ -146,6 +223,8 @@ export class Scene {
     fs.rmSync(this.framesDir, { recursive: true, force: true });
     fs.mkdirSync(this.framesDir, { recursive: true });
     fs.mkdirSync(path.join(VDIR, 'clips'), { recursive: true });
+    const hf = path.join(VDIR, 'clips', 'secret-hits.json'); // a new take of this scene clears the last take's hit
+    if (!DRY && fs.existsSync(hf)) { const h = readJson(hf); delete h[String(this.n)]; fs.writeFileSync(hf, JSON.stringify(h, null, 1)); }
     const calm = videoCfg().calm_css ? String(videoCfg().calm_css) : '';
     // invisible 2 px element that keeps repainting, so the screencast stays ~30 fps on a still page
     await this.page.addInitScript((css: string) => {
@@ -178,6 +257,7 @@ export class Scene {
       if (this.cutOpen !== null) throw new Error('cannot wait on the clip clock inside cutStart/cutEnd');
       const d = t - this.now();
       if (d <= 0.002) return;
+      if (d > 0.6 && performance.now() - this.lastScan > 1000) await this.scanSecrets('wait'); // a token that appears mid-scene
       await sleep(Math.min(d * 1000, 50));
     }
   }
@@ -302,6 +382,7 @@ export class Scene {
     await this.page.mouse.down();
     await sleep(70);
     await this.page.mouse.up();
+    if (!cue.cut) await this.scanSecrets('click');
   }
 
   async hover(target: Target, cue: Cue = {}) {
@@ -314,6 +395,7 @@ export class Scene {
     this.lateCheck('hover', cueT, tl, cue.on ?? '');
     await this.autoLabels();
     this.events.push({ t: +tl.toFixed(3), kind: 'hover', box: b, cue: cue.on });
+    await this.scanSecrets('hover');
   }
 
   /** Direct the viewer's eye to a region without moving the pointer. `wide` asks for a wider view. */
@@ -325,6 +407,7 @@ export class Scene {
     this.lateCheck('look', cueT, tl, cue.on ?? '');
     await this.autoLabels();
     this.events.push({ t: +tl.toFixed(3), kind: 'look', box: b, wide: cue.wide, cue: cue.on });
+    await this.scanSecrets('look');
   }
 
   /** Lower-third in the edit: exact label + short hint, shown from the cue for `hold` seconds. */
@@ -336,10 +419,13 @@ export class Scene {
     const tl = this.now();
     this.lateCheck('callout', cueT, tl, cue.on ?? label);
     this.events.push({ t: +tl.toFixed(3), kind: 'callout', label, hint, hold: cue.hold ?? 3.2, cue: cue.on });
+    await this.scanSecrets('callout');
   }
 
   /** Type into a field one char at a time (the field is clicked at the cue first). */
   async type(target: Target, text: string, cue: Cue & { delay?: number } = {}) {
+    const pw = /pass/i.test(String(target));
+    if (!pw) await this.scanSecrets('type', [{ field: 'typed text', value: text }]); // before it appears on screen
     await this.click(target, cue);
     const b = await this.box(target);
     this.events.push({ t: +this.now().toFixed(3), kind: 'type', box: b, text: /pass/i.test(String(target)) ? '' : text });
@@ -348,6 +434,7 @@ export class Scene {
       await this.page.keyboard.type(text[i]);
       await sleep(d + ((i * 37) % 31) - 15);
     }
+    await this.scanSecrets('type');
   }
 
   /** Smooth scroll so `target` sits near the upper third (`align: 'bottom'`: its bottom edge on the viewport's bottom edge,
@@ -374,6 +461,7 @@ export class Scene {
     }
     this.events.push({ t: +this.now().toFixed(3), kind: 'scroll' });
     await this.autoLabels();
+    await this.scanSecrets('scroll');
   }
 
   /** Assert an exact on-screen label is visible; recorded in clips/labels.json. A label the line names in «» is also logged
@@ -441,7 +529,33 @@ export class Scene {
   }
 
   // ---- internals ---------------------------------------------------------
+  /** Fail the take when a secret is on screen (or about to be typed). The log names the kind and the field, never the value. */
+  private async scanSecrets(when: string, extra: { field: string; value: string }[] = []) {
+    let hits: { kind: string; field: string }[];
+    this.lastScan = performance.now();
+    try {
+      hits = await this.page.evaluate(secretFind, { cfg: SECRET_CFG, allow: this.secretAllow.map((a) => a.pattern), masked: this.maskedSelectors, extra });
+    } catch (e) {
+      if (/context was destroyed|navigat|closed/i.test(String(e))) return; // the page is changing under a click
+      throw e;
+    }
+    this.scans++;
+    if (!hits.length) return;
+    const msg = hits.map((h) => `${h.kind} in ${h.field}`).join('; ');
+    if (DRY) {
+      if (!this.reported.has(msg)) console.log(`[drift] scene ${this.n}: possible secret (${when}): ${msg}`);
+      this.reported.add(msg);
+      return;
+    }
+    const f = path.join(VDIR, 'clips', 'secret-hits.json');
+    const all = fs.existsSync(f) ? readJson(f) : {};
+    all[String(this.n)] = { when, hits };
+    fs.writeFileSync(f, JSON.stringify(all, null, 1));
+    throw new Error(`scene ${this.n} secret scan (${when}) found: ${msg}`);
+  }
+
   private async preflight(when: string) {
+    await this.scanSecrets('preflight ' + when);
     const problems: string[] = await this.page.evaluate(async (fams: string[]) => {
       await document.fonts.ready;
       const loaded = [...document.fonts].filter((f) => f.status === 'loaded').map((f) => f.family.replace(/["'\s]+/g, '_').toLowerCase());
@@ -530,11 +644,12 @@ export class Scene {
     fs.writeFileSync(
       path.join(VDIR, 'clips', `scene-${nn}.json`),
       JSON.stringify({
-        log_version: 2, scene: this.n, voiceAt: this.voiceAt, voiceDuration: this.voice?.duration ?? 0, duration: +endClip.toFixed(3),
+        log_version: 3, scene: this.n, voiceAt: this.voiceAt, voiceDuration: this.voice?.duration ?? 0, duration: +endClip.toFixed(3),
         fps: 30, size: [FRAME.w, FRAME.h], viewport: [VIEW.w, VIEW.h],
         capture: { frames: kept.length, span: +span.toFixed(3), avg_fps: +(kept.length / Math.max(span, 0.1)).toFixed(1) },
         cuts: this.cuts, events: this.events, path: this.pathLog, presses: this.presses, late: this.late,
         voice_sig: this.voice?.sig, unchecked_labels: unchecked, preflight: this.preflightLog, fonts: this.fonts,
+        secrets: { scans: this.scans, allow: this.secretAllow },
       }),
     );
     fs.rmSync(this.framesDir, { recursive: true, force: true });
