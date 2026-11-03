@@ -620,10 +620,13 @@ export class Scene {
    *  skips what the plate covers. */
   async mask(selector: string, o: { after?: string; why: string }) {
     if (!o.why?.trim()) throw new Error(`scene ${this.n}: mask(${selector}) needs a why`);
+    // Outside a cut the viewer sees what the mask hides for as long as the page takes to apply it.
+    if (!DRY && this.cutOpen === null) throw new Error(`scene ${this.n}: mask(${selector}) must run inside a cut`);
     await this.page.locator(selector).first().waitFor({ state: 'attached', timeout: 8000 });
     await this.page.evaluate(domMask, { selector, after: o.after ?? null, id: `__dvm_mask_${this.maskedSelectors.length}` });
     this.maskedSelectors.push(selector);
     this.domEdits.push({ t: +this.now().toFixed(3), kind: 'mask', selector, before: o.after, why: o.why });
+    await this.settle(350); // the masked picture has to reach the screencast before the cut ends: a token showed for 0.14 s without this
   }
 
   /** Assert an exact on-screen label is visible; recorded in clips/labels.json. A label the line names in «» is also logged

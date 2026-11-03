@@ -206,7 +206,8 @@ Found while listening to 01-tour-fa:
 35. **Clip and take must match.** Each clip log stores the signature of the voice take it was recorded against; the gate fails a mismatch and a scene with no clip.
 36. **Drift check (idea from `aidemo`'s CI replay).** A merged app moved 78 commits past the Praxabase videos without anyone noticing. `box.sh drift` runs the spec with the clock, capture and clip logs off.
 37. **Capture allowance.** `video.json` `gate.capture_allow` (`{"8": {"min": 15, "why": "..."}}`) lowers the floor for one named scene with a stated reason, when an idle box still cannot reach it and the scene is mostly static. Load on the box is the usual cause, so re-record first.
-38. **Media outside the repo.** Removing a worktree no longer deletes the only copy of a finished video, and the repo carries sources only.
+38. **A mask paints inside its cut.** `s.mask` applied the blur and the cut ended at once, so 5 frames showed `localhost` and the token before the plate painted. Only a frame-level look caught it: the gate reads the DOM, not the picture. Step frames at 30 fps around every masked cut.
+39. **Media outside the repo.** Removing a worktree no longer deletes the only copy of a finished video, and the repo carries sources only.
 
 Found while comparing with similar tools (2026-11):
 39. **A narrated label is an overlap target.** The old check only boxed logged clicks, hovers, looks and typing, so a subtitle could sit
