@@ -17,6 +17,13 @@ Free and open-source tools only: Playwright, ffmpeg, Python with numpy and openc
 6. No error states on camera. Show no red validation, error toasts or spinners unless the scene is about them. If showing the real error once teaches something, show it briefly, then return to a calm state.
 7. Work on a local or staging stack, never production data.
 
+## Storyboard rules
+Our rules for what the video says and shows. Check the storyboard against them before voicing anything.
+1. **Open on the viewer's problem.** Scene 1 states what goes wrong for the viewer today, in their words, before any feature name.
+2. **Product on screen within 3 s.** The first real UI is visible by second 3. An intro card is short or absent when it would push the UI past that.
+3. **Most screen time on the one moment only this product delivers.** Pick that moment first, give it the longest scene and the closest zoom. Everything else is setup or payoff; cut a scene that any competitor's demo would also show.
+4. **End on one headline plus the CTA.** The last card carries the product's real tagline, quoted from its own site, and one action (one URL or one button). No second message, no feature list.
+
 ## Layout
 See `engine.md`. The engine lives in this skill; a project holds only `project.json` and its video folders.
 
