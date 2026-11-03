@@ -15,7 +15,7 @@ BOX=~/.claude/skills/demo-video-maker/engine/lib/box.sh   # run from the project
 
 ## Settle first
 
-Project and URL, the account or demo sign-in, UI language, narration language, voice id. A voice the user has already named wins. Ask only for what the repo cannot answer.
+Project and URL, the account or demo sign-in, UI language, narration language, voice id, **target platform** (where it will play: site embed, YouTube, social feed, GIF in a README). Ask the platform before recording. The engine makes one shape only, 16:9 1920x1080 at 30 fps, recorded from a 1280x720 viewport: say so, and if the platform wants vertical or square (9:16, 1:1, 4:5) tell the user it is not supported rather than cropping the 16:9 cut. A platform's length limit goes in `max_seconds`. A voice the user has already named wins. Ask only for what the repo cannot answer.
 
 ## Steps
 
@@ -25,7 +25,7 @@ Project and URL, the account or demo sign-in, UI language, narration language, v
 4. **Listen.** Start `$BOX review <v>` in the user's terminal and give them `http://127.0.0.1:8765/`. They edit, hear and keep takes themselves. Speech-to-text cannot hear vowels, so never claim a pronunciation is right from a transcript. A word wrong everywhere goes in `voice.respell`, then voice those scenes again in the page: a take the page did not keep is voiced unheard.
 5. **Record, edit, gate.** `$BOX sync` (carries kept takes), then `$BOX run <v> voice --music`, `record`, `edit`, `gate`, `fetch`. After this first full recording, `$BOX apply <v>` ships later kept takes; it cannot build a first cut. The gate names any scene whose clip no longer matches its take: re-record it with `SCENES=`.
 6. **Independent review.** Four fresh agents in parallel on `fable` or `opus`, one lens each (design/layout, text/readability, pacing/narrative, brand vs real product; lens checklists in `method.md`). Each gets the review frames (`out/<name>.review/`), the contact sheet, `edit.json`, the gate result, the transcript and the step 1 UI dump, and returns findings only. Merge them into one fix plan (dedupe, severity, then re-edit / re-record / re-voice), fix, re-review the lenses that had findings. Never review your own cut or tooling change in the same agent.
-7. **Listen to the final** with the user, then deliver. Send the contact sheet, transcript and loudness.
+7. **Listen to the final** with the user, then deliver. Send the contact sheet, transcript and loudness. A GIF on request: `$BOX run <v> gif` (no audio; `--subs` for burned-in words).
 
 **Later:** the app keeps moving. Run `$BOX drift <v>` before relying on an old video: it runs every step and label against the current app without filming or spending, and lists what no longer matches.
 

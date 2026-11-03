@@ -29,6 +29,7 @@ $BOX run 01-tour record        # SCENES=2,5 limits it
 $BOX run 01-tour edit --preview  # 960x540 / 15 fps; --plan writes subtitle positions without rendering
 $BOX run 01-tour edit
 $BOX run 01-tour gate
+$BOX run 01-tour gif --dur 8   # out/<name>.gif from the finished mp4 (--start, --width 720, --fps 12, --subs)
 $BOX run 01-tour text          # sample subtitle + callout at 720p with the video's theme; no clips needed
 $BOX run 01-tour frames        # ~20 review frames again (--n 20); the gate already writes them
 $BOX fetch 01-tour             # out/, clip logs and takes to the media folder
@@ -283,6 +284,13 @@ Found while comparing with similar tools (2026-11):
     an item of the text/readability review lens instead (cards are 30 px or more in the 1080p frame, so they pass by construction). `edit.json` from before this
     change has no `text_px`: the gate fails it until the edit is run again (the overlay cache is keyed with a renderer version, so it re-renders).
 
+49. **Platform and GIF.** Checked in the code: the recorder viewport is 1280x720 (`playwright.config.ts`, `VIEW` in `demo.ts`), the capture is 2560x1440, the edit
+    constants are 1920x1080 at 30 fps (`--preview`: 960x540 at 15 fps), and the gate fails any other shape. There is no aspect-ratio option, so the engine supports 16:9 only.
+    Vertical, square and 4:5 would need a second viewport, a layout check of the product at that width and a camera that frames a narrow crop; none exists, and a centre
+    crop of the 16:9 cut would cut off the pointer targets, subtitles and callouts. "Settle first" asks the platform so this is said before recording. `lib/gif.py`
+    (`box.sh run <v> gif`) cuts a clip from `out/<name>-nosubs.mp4` (or `<name>.mp4` with `--subs`) with the image's ffmpeg: fps, scale, a palette from the clip, loop, no audio. Default
+    8 s, 720 wide, 12 fps. Tried: 6 s of the 01-tour cut at 720x405 12 fps = 1.2 MB; on the box image a 3 s test clip at 480 wide ran. Size is not capped: check it against the platform's limit.
+
 ## Known limits
 
 - Capture is ~20-25 fps on test_vps (software rendering at 2x). The pointer and ripple are drawn from logs at 30 fps, so
@@ -293,4 +301,5 @@ Found while comparing with similar tools (2026-11):
 - Cards use the Praxabase palette by default; override with `theme`.
 - Right-to-left (fa) subtitles and cards were first used by 01-tour-fa. The landing page has no Persian version, so a Persian
   video starts from `/signup` (signed out, `pb_lang=fa`).
+- One output shape: 16:9 1920x1080 (see 49). No vertical or square.
 - Local runs on a Mac need Playwright's Chromium; the pinned Docker image is the reference environment.
