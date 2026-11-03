@@ -304,6 +304,7 @@ export class Scene {
     fs.rmSync(this.framesDir, { recursive: true, force: true });
     fs.mkdirSync(this.framesDir, { recursive: true });
     fs.mkdirSync(path.join(VDIR, 'clips'), { recursive: true });
+    if (DRY && process.env.DEMO_SHOTS === '1' && fs.existsSync(path.join(VDIR, 'drift-shots'))) for (const f of fs.readdirSync(path.join(VDIR, 'drift-shots'))) if (f.startsWith(`scene-${String(this.n).padStart(2, '0')}-`) || f === `scene-${String(this.n).padStart(2, '0')}.json`) fs.rmSync(path.join(VDIR, 'drift-shots', f));
     const hf = path.join(VDIR, 'clips', 'secret-hits.json'); // a new take of this scene clears the last take's hit
     if (!DRY && fs.existsSync(hf)) { const h = readJson(hf); delete h[String(this.n)]; fs.writeFileSync(hf, JSON.stringify(h, null, 1)); }
     const calm = videoCfg().calm_css ? String(videoCfg().calm_css) : '';
@@ -458,6 +459,7 @@ export class Scene {
     this.lateCheck('click', cueT, tp, cue.on ?? '');
     await this.autoLabels();
     this.events.push({ t: +tp.toFixed(3), kind: 'click', box: b, cue: cue.on });
+    await this.drawShot('click', b, { cue: cue.on });
     this.presses.push([+tp.toFixed(3), c.x, c.y]);
     if (cue.cut) this.cutStart(); // frames after the press are dropped until cutEnd(): hides saves and page loads
     await this.page.mouse.down();
@@ -476,6 +478,7 @@ export class Scene {
     this.lateCheck('hover', cueT, tl, cue.on ?? '');
     await this.autoLabels();
     this.events.push({ t: +tl.toFixed(3), kind: 'hover', box: b, cue: cue.on });
+    await this.drawShot('hover', b, { cue: cue.on });
     await this.scanSecrets('hover');
   }
 
@@ -488,6 +491,7 @@ export class Scene {
     this.lateCheck('look', cueT, tl, cue.on ?? '');
     await this.autoLabels();
     this.events.push({ t: +tl.toFixed(3), kind: 'look', box: b, wide: cue.wide, cue: cue.on });
+    await this.drawShot('look', b, { cue: cue.on });
     await this.scanSecrets('look');
   }
 
@@ -510,6 +514,7 @@ export class Scene {
     await this.click(target, cue);
     const b = await this.box(target);
     this.events.push({ t: +this.now().toFixed(3), kind: 'type', box: b, text: /pass/i.test(String(target)) ? '' : text });
+    await this.drawShot('type', b);
     const d = cue.delay ?? 65;
     for (let i = 0; i < text.length; i++) {
       await this.page.keyboard.type(text[i]);
@@ -565,6 +570,26 @@ export class Scene {
     return seen.map((t) => ({ t, s: similar(text, t) })).filter((x) => x.s >= 0.3).sort((a, b) => b.s - a.s).slice(0, 5).map((x) => x.t);
   }
 
+
+  /** Drift check with DEMO_SHOTS=1: one PNG per target (click, hover, look, type, named label) with its box drawn, so a wrong
+   *  framing or a moved element is seen before any voice is paid for. drift-shots/scene-NN.json lists them. */
+  private shotLog: { file: string; kind: string; cue?: string; label?: string; box: Box }[] = [];
+  private async drawShot(kind: string, box: Box, extra: { cue?: string; label?: string } = {}) {
+    if (!DRY || process.env.DEMO_SHOTS !== '1') return;
+    const dir = path.join(VDIR, 'drift-shots');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = `scene-${String(this.n).padStart(2, '0')}-${String(this.shotLog.length + 1).padStart(2, '0')}-${kind}.png`;
+    await this.page.evaluate((b) => {
+      const d = document.createElement('div');
+      d.id = '__dvm_shot_box';
+      Object.assign(d.style, { position: 'fixed', left: b.x + 'px', top: b.y + 'px', width: b.width + 'px', height: b.height + 'px', outline: '3px solid #ff2d95', outlineOffset: '2px', zIndex: '2147483647', pointerEvents: 'none' });
+      document.body.appendChild(d);
+    }, box);
+    await this.page.screenshot({ path: path.join(dir, file) }).catch(() => {});
+    await this.page.evaluate(() => document.getElementById('__dvm_shot_box')?.remove());
+    this.shotLog.push({ file, kind, box, ...extra });
+  }
+
   /** The one way a spec may change what the page shows. Rewrites `prop` (`value`, `text` or an attribute) of the elements matching
    *  `selector`: `from` -> `to` inside the current text, or the whole value -> `to` without `from`. The edit and its reason are
    *  logged to `dom_edits` and listed by the gate; a raw page.evaluate/route/addInitScript in a spec fails the gate. */
@@ -612,6 +637,7 @@ export class Scene {
     const shot = found ? '' : path.relative(VDIR, await this.failShot());
     if (DRY) {
       if (!found) console.log(`[drift] scene ${this.n}: label "${text}" is not on screen; nearest: ${suggest.map((x) => `"${x}"`).join(', ') || 'nothing alike'} (${shot})`);
+      if (found && box) await this.drawShot('label', box, { label: text });
       return; // list every stale label in one run, and leave the real clip logs alone
     }
     const f = path.join(VDIR, 'clips', 'labels.json');
@@ -646,6 +672,7 @@ export class Scene {
     const unchecked = [...spoken.matchAll(/«([^»]+)»/g)].map((m) => m[1]).filter((l) => !this.checked.has(norm(l)));
     for (const l of unchecked) console.warn(`[label] scene ${this.n}: "${l}" is named in the line but was never checked`);
     if (DRY) {
+      if (this.shotLog.length) fs.writeFileSync(path.join(VDIR, 'drift-shots', `scene-${String(this.n).padStart(2, '0')}.json`), JSON.stringify(this.shotLog, null, 1));
       for (const l of unchecked) console.log(`[drift] scene ${this.n}: "${l}" is in the script but no step checks it`);
       this.done = true;
       return;

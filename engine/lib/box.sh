@@ -8,7 +8,8 @@
 #   box.sh run <video> <step> ...   step: voice [scene] [--force] [--music] [--recheck] | record | edit [--preview|--plan] | gate [--no-stt]
 #   box.sh fetch <video>            copy out/, clip logs and voice takes to the media folder
 #   box.sh review <video> [--port N]  local page: change what the voice reads, hear it, keep the take you approve
-#   box.sh drift <video>            without filming, run every step and label against the current app: does the video still match?
+#   box.sh drift <video> [--shots]  without filming, run every step and label against the current app: does the video still match?
+#                                   --shots also saves one PNG per target with its box drawn (drift-shots/)
 #   box.sh apply <video>            ship the kept takes: re-record the changed scenes, edit, gate, fetch
 #   box.sh rerecord <video> [passes]  re-record scenes with a late cue or a low capture rate
 #   box.sh all <video>              sync, app, voice, record, edit, gate, fetch
@@ -33,7 +34,7 @@ case "${1:-}" in
   new)
     [ -e "${2:?video}" ] && { echo "$2 already exists" >&2; exit 1; }
     mkdir "$2"; cp "$ENGINE"/_template/{narration.txt,scenes.spec.ts,storyboard.md,video.json} "$2/"; echo "started $2"; exit 0 ;;
-  ""|-h|--help) sed -n '2,16p' "$0"; exit 2 ;;
+  ""|-h|--help) sed -n '2,17p' "$0"; exit 2 ;;
 esac
 [ -f project.json ] || { echo "no project.json here: run this from the project's demo-videos folder (box.sh init <project>)" >&2; exit 1; }
 PROJECT="$(pj project)"; BOX="$(pj box)"; APPC="$(pj app.container)"
@@ -120,7 +121,7 @@ PY
     gate)   shift; cmd="python lib/gate.py $video $*" ;;
     *) echo "unknown step $1" >&2; exit 2 ;;
   esac
-  for v in DEMO_DRY SCENE_TIMEOUT_MS DEMO_START_LANG DEMO_ENTRY_URL DEMO_LOGIN_URL DEMO_EMAIL DEMO_PASSWORD DEMO_AFTER_URL; do
+  for v in DEMO_DRY DEMO_SHOTS SCENE_TIMEOUT_MS DEMO_START_LANG DEMO_ENTRY_URL DEMO_LOGIN_URL DEMO_EMAIL DEMO_PASSWORD DEMO_AFTER_URL; do
     [ -n "${!v:-}" ] && extra+=" -e $v=$(printf '%q' "${!v}")"
   done
   # Detached and followed with `docker logs -f`: the box drops ssh sessions under load, and a dropped session used to
@@ -221,8 +222,17 @@ case "$1" in
   fetch) fetch "$2" ;;
   review) v="$2"; shift 2; fetch "$v" >/dev/null 2>&1 || true; exec python3 "$ENGINE/lib/review.py" "$HERE/$v" "$MEDIA/$v" "$@" ;;
   apply) apply "$2" ;;
-  drift) sync_all; app; DEMO_DRY=1 SCENE_TIMEOUT_MS="${SCENE_TIMEOUT_MS:-60000}" runstep "$2" record ;;
+  drift) v="$2"; shift 2
+    # --shots: one PNG per click/hover/look/type/named label with its box drawn, in $MEDIA/<video>/drift-shots/ (nothing is filmed or paid for)
+    if [ "${1:-}" = --shots ]; then export DEMO_SHOTS=1; fi
+    sync_all; app; rc=0
+    DEMO_DRY=1 SCENE_TIMEOUT_MS="${SCENE_TIMEOUT_MS:-60000}" runstep "$v" record || rc=$?
+    if [ "${DEMO_SHOTS:-}" = 1 ]; then
+      mkdir -p "$MEDIA/$v/drift-shots"
+      retry rsync -a --delete "$BOX:$REMOTE/$v/drift-shots/" "$MEDIA/$v/drift-shots/" && echo "shots in $MEDIA/$v/drift-shots"
+    fi
+    exit "$rc" ;;
   rerecord) rerecord "$2" "${3:-4}" ;;
   all) v="$2"; sync_all; app; runstep "$v" voice; runstep "$v" record; runstep "$v" edit; runstep "$v" gate || true; fetch "$v" ;;
-  *) sed -n '2,16p' "$0"; exit 2 ;;
+  *) sed -n '2,17p' "$0"; exit 2 ;;
 esac

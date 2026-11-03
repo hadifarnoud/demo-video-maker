@@ -32,6 +32,7 @@ $BOX run 01-tour gate
 $BOX fetch 01-tour             # out/, clip logs and takes to the media folder
 $BOX review 01-tour            # local page: change the voice, hear it, keep a take
 $BOX drift 01-tour             # no filming: every step and label against the current app; prints [drift] lines
+$BOX drift 01-tour --shots     # the same, plus one PNG per target with its box drawn, in the media folder's drift-shots/
 $BOX apply 01-tour             # kept takes -> re-record changed scenes, edit, gate, fetch
 $BOX rerecord 01-tour          # re-record late or low-fps scenes
 ```
@@ -239,7 +240,7 @@ Found while comparing with similar tools (2026-11):
     `edit.json` carries `zoom_cycles` and `zoom_travel` per scene (a cycle = in, hold, back to the full view; a clip that ends zoomed
     cycles at its end, where the crossfade returns to the full view) and `zoom_cycle_times` on the timeline. The gate fails more
     than `gate.max_zoom_cycles` (default 2) cycles in any `gate.zoom_window_s` (default 10) seconds. `zoom.stay: 0` brings back the
-    old pumping, which is how the check is tested. Older cuts can be re-gated after `edit --plan` or a re-edit.
+    old pumping, which is how the check is tested. Re-edit an older cut (no filming, no voice) to get the numbers.
 
 43. **A failed label shows what was on screen.** A missing label used to stop with only its name, and the page was gone by the time
     anyone looked. `label()` now saves `clips/fail-NN.png` (`drift-shots/fail-NN.png` in a drift run) and names the five visible texts
@@ -251,6 +252,12 @@ Found while comparing with similar tools (2026-11):
     `-nosubs.mp4` (off by default, so a viewer can turn captions on without the burned-in ones; language from `voice.language_code`),
     and writes one chapter per item (card or scene title, from `scene(n, 'Title')`) into both mp4s. The gate compares the cue counts
     with the chunks and reads the track and chapters back with ffprobe. `--preview` writes none of the sidecars.
+
+45. **`drift --shots`.** Wrong framing, a target that moved or a label in the wrong place showed only after a full record. A drift
+    run with `--shots` saves `drift-shots/scene-NN-SS-<kind>.png` for every click, hover, look, typed field and checked label, with its
+    box outlined, and `scene-NN.json` with the boxes. They are the boxes `clips/scene-NN.json` holds after a real record, taken without
+    filming or voice. The planned subtitle band is not drawn: it needs a recorded clip (`edit.py --plan`). `box.sh sync` clears the
+    old shots.
 
 ## Known limits
 
