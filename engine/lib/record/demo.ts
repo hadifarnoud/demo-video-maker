@@ -219,6 +219,36 @@ function domMask(arg: { selector: string; after: string | null; id: string }): n
   return document.querySelectorAll(arg.selector).length;
 }
 
+/** Runs in the page: the visible texts a label could have meant (an element's own text, or the whole text of a small element). */
+function visibleTexts(): string[] {
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const out = new Set<string>();
+  const clean = (x: string) => x.replace(/\s+/g, ' ').trim();
+  for (const e of Array.from(document.body.querySelectorAll('*'))) {
+    const r = e.getBoundingClientRect();
+    if (r.width <= 0 || r.height <= 0 || r.bottom < 0 || r.top > vh || r.right < 0 || r.left > vw) continue;
+    const cs = getComputedStyle(e);
+    if (cs.visibility === 'hidden' || cs.display === 'none') continue;
+    const own = clean(Array.from(e.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent ?? '').join(' '));
+    if (own.length >= 2 && own.length <= 120) out.add(own);
+    const whole = clean(e.textContent ?? '');
+    if (e.children.length <= 3 && whole.length >= 2 && whole.length <= 120) out.add(whole);
+    if (out.size > 800) break;
+  }
+  return [...out];
+}
+
+/** Bigram overlap (Dice) of two strings, 0..1; a text that contains the other counts as at least 0.6. */
+function similar(a: string, b: string): number {
+  const x = a.toLowerCase(), y = b.toLowerCase();
+  if (x.length > 3 && (y.includes(x) || x.includes(y))) return Math.max(0.6, 2 / (1 + Math.abs(x.length - y.length)));
+  const grams = (z: string) => { const m = new Map<string, number>(); for (let i = 0; i + 1 < z.length; i++) m.set(z.slice(i, i + 2), (m.get(z.slice(i, i + 2)) ?? 0) + 1); return m; };
+  const ga = grams(x), gb = grams(y);
+  let hit = 0;
+  for (const [g, n] of ga) hit += Math.min(n, gb.get(g) ?? 0);
+  return x.length + y.length < 2 ? 0 : (2 * hit) / (Math.max(1, x.length - 1) + Math.max(1, y.length - 1));
+}
+
 export class Scene {
   readonly page: Page;
   readonly n: number;
@@ -513,6 +543,25 @@ export class Scene {
   }
 
 
+
+  /** Evidence for a failed take: the screen as it was (clips/fail-NN.png; drift-shots/ in a drift run). */
+  async failShot(): Promise<string> {
+    const dir = path.join(VDIR, DRY ? 'drift-shots' : 'clips');
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `fail-${String(this.n).padStart(2, '0')}.png`);
+    if (this.shot) return file;
+    this.shot = true;
+    await this.page.screenshot({ path: file }).catch(() => {});
+    return file;
+  }
+  private shot = false;
+
+  /** The visible texts closest to a label that was not found, best first. */
+  private async nearest(text: string): Promise<string[]> {
+    const seen = await this.page.evaluate(visibleTexts).catch(() => [] as string[]);
+    return seen.map((t) => ({ t, s: similar(text, t) })).filter((x) => x.s >= 0.3).sort((a, b) => b.s - a.s).slice(0, 5).map((x) => x.t);
+  }
+
   /** The one way a spec may change what the page shows. Rewrites `prop` (`value`, `text` or an attribute) of the elements matching
    *  `selector`: `from` -> `to` inside the current text, or the whole value -> `to` without `from`. The edit and its reason are
    *  logged to `dom_edits` and listed by the gate; a raw page.evaluate/route/addInitScript in a spec fails the gate. */
@@ -556,15 +605,17 @@ export class Scene {
     }
     const found = box !== null;
     this.checked.add(norm(text));
+    const suggest = found ? [] : await this.nearest(text);
+    const shot = found ? '' : path.relative(VDIR, await this.failShot());
     if (DRY) {
-      if (!found) console.log(`[drift] scene ${this.n}: label "${text}" is not on screen`);
+      if (!found) console.log(`[drift] scene ${this.n}: label "${text}" is not on screen; nearest: ${suggest.map((x) => `"${x}"`).join(', ') || 'nothing alike'} (${shot})`);
       return; // list every stale label in one run, and leave the real clip logs alone
     }
     const f = path.join(VDIR, 'clips', 'labels.json');
     const all = fs.existsSync(f) ? readJson(f) : {};
-    all[`scene-${this.n}: ${text}`] = { scene: this.n, label: text, found };
+    all[`scene-${this.n}: ${text}`] = found ? { scene: this.n, label: text, found } : { scene: this.n, label: text, found, suggest, shot };
     fs.writeFileSync(f, JSON.stringify(all, null, 1));
-    if (!found) throw new Error(`scene ${this.n}: label "${text}" is not visible on screen`);
+    if (!found) throw new Error(`scene ${this.n}: label "${text}" is not visible on screen; nearest on screen: ${suggest.map((x) => `"${x}"`).join(', ') || 'nothing alike'}; screenshot ${shot}`);
     if (this.recording && this.cutOpen === null && box) {
       const named = [...(this.voice?.line ?? '').matchAll(/«([^»]+)»/g)].some((m) => norm(m[1]) === norm(text));
       const hit = this.voice ? findPhrase(this.voice.text, text, 0) : null;
@@ -660,7 +711,7 @@ export class Scene {
       return out;
     }, this.fonts);
     this.preflightLog.push({ when, ok: problems.length === 0, problems });
-    if (problems.length) throw new Error(`scene ${this.n} preflight (${when}) failed: ${problems.join('; ')}`);
+    if (problems.length) throw new Error(`scene ${this.n} preflight (${when}) failed: ${problems.join('; ')}; screenshot ${path.relative(VDIR, await this.failShot())}`);
   }
 
   private async startCapture() {
@@ -749,6 +800,10 @@ export function scene(n: number, title: string, fn: (s: Scene) => Promise<void>)
     try {
       await fn(s);
       await s.finish();
+    } catch (e) {
+      const png = await s.failShot();
+      console.error(`[fail] scene ${n}: ${String(e instanceof Error ? e.message : e).split('\n')[0]}\n[fail] screenshot ${path.relative(VDIR, png)}`);
+      throw e;
     } finally {
       await s.dispose();
     }

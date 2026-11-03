@@ -146,7 +146,7 @@ fetch() {
   local v="$1"; mkdir -p "$MEDIA/$v/out" "$MEDIA/$v/clips" "$MEDIA/$v/audio"
   retry ssh "$BOX" "mkdir -p $REMOTE/$v/out $REMOTE/$v/clips $REMOTE/$v/audio"
   retry rsync -a "$BOX:$REMOTE/$v/out/" "$MEDIA/$v/out/"
-  retry rsync -a --include='*.json' --exclude='*' "$BOX:$REMOTE/$v/clips/" "$MEDIA/$v/clips/"
+  retry rsync -a --include='*.json' --include='fail-*.png' --exclude='*' "$BOX:$REMOTE/$v/clips/" "$MEDIA/$v/clips/"  # fail-NN.png: the screen of a failed take
   # --update: a take kept in the review page is newer than the box's copy and must survive
   retry rsync -a --update --exclude music.mp3 "$BOX:$REMOTE/$v/audio/" "$MEDIA/$v/audio/"
   echo "fetched to $MEDIA/$v"

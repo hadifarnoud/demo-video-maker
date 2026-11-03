@@ -241,6 +241,11 @@ Found while comparing with similar tools (2026-11):
     than `gate.max_zoom_cycles` (default 2) cycles in any `gate.zoom_window_s` (default 10) seconds. `zoom.stay: 0` brings back the
     old pumping, which is how the check is tested. Older cuts can be re-gated after `edit --plan` or a re-edit.
 
+43. **A failed label shows what was on screen.** A missing label used to stop with only its name, and the page was gone by the time
+    anyone looked. `label()` now saves `clips/fail-NN.png` (`drift-shots/fail-NN.png` in a drift run) and names the five visible texts
+    closest to it (bigram overlap) in the error, in `labels.json` (`suggest`, `shot`) and in the `[drift]` line, so a renamed button is a
+    one-line fix. A pre-flight failure and any other error in a scene save the same PNG. `box.sh fetch` brings `fail-*.png` back.
+
 ## Known limits
 
 - Capture is ~20-25 fps on test_vps (software rendering at 2x). The pointer and ripple are drawn from logs at 30 fps, so
