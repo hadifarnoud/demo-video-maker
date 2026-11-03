@@ -64,6 +64,7 @@ a Playwright `Locator` or a `{x, y, width, height}` box (CSS px, 1280x720 viewpo
 | `type(target, text, cue + {delay})` | click the field at the cue, then type char by char. Password-like targets are not logged |
 | `scrollTo(target, cue)` | smooth scroll, ends at the cue |
 | `label(text, scope?)` | assert an exact label is visible; writes `clips/labels.json` and, when the line names it in «», logs its box as an overlap target. `«Label»` cues call it for you |
+| `rewrite(selector, {prop, from, to, why})` / `mask(selector, {after, why})` | the only allowed DOM edits: logged to `dom_edits`, listed by the gate. `from` may hold `$ORIGIN` (the page origin) |
 | `cutStart()` / `cutEnd()` | cut slow saves and page loads out of the clip (clip time skips the cut) |
 | `finish()` | hold until the line ends + 0.6 s, final pre-flight, encode `clips/scene-NN.mp4`. Called for you if omitted |
 
@@ -100,7 +101,7 @@ colour); `max_seconds`; `gate` (`stt_min`, `lufs_tol`, `max_pan`, `max_zoom_rate
 ## Gate (`lib/gate.py`)
 
 Automated: output shape (1920x1080, 30 fps, audio), duration limit, every `«label»` of the narration was found on screen,
-no late cue, pre-flight clean, no secret on screen or in the logs, steady capture rate, red-state scan, camera speed, subtitles never cover an action or a named label (geometry and a pixel diff),
+no late cue, pre-flight clean, no secret on screen or in the logs, no raw DOM edit in the spec (declared ones are listed), steady capture rate, red-state scan, camera speed, subtitles never cover an action or a named label (geometry and a pixel diff),
 music covers the video, loudness -16 LUFS +-1, STT of the final mix vs `narration.txt`. Writes `out/<name>.gate.json` and
 `out/<name>.contact.jpg` (1 frame / 1.5 s). Still manual: an independent reviewer looks at the contact sheet and
 transcript, including the zoom moves and the subtitle placement.
@@ -221,6 +222,16 @@ Found while comparing with similar tools (2026-11):
     and the field, never the value (`clips/secret-hits.json`). `gate.py` runs the same rules over the clip logs, labels, narration and
     subtitles. A known demo value goes in `video.json` `secrets.allow` (`{"pattern": regex tested against the match, "why": reason}`);
     a reason is required and the gate prints it.
+
+41. **Declared DOM edits only.** `label()` asserts against the page as it is, so a spec that rewrote text with `page.evaluate`,
+    `addInitScript` or `route.fulfill` could show a word the product never rendered, and a reviewer could not tell. The only way
+    to change what the page shows is now `s.rewrite(selector, {prop, from, to, why})` (rewrite a value, text or attribute and keep
+    it that way) and `s.mask(selector, {after, why})` (a blur plate; the secret scan skips what it covers). Each logs selector,
+    before, after and the reason to `dom_edits` in the clip log; a reason is required. `lib/specscan.py` reads the spec for writes
+    (text, value, attributes, inserted nodes, timers, injected code, route/fulfill; read-only `evaluate` such as `scrollIntoView` is
+    fine). `box.sh record` refuses a spec that fails it, `drift` prints it, and the gate fails it and lists the declared edits
+    for the reviewer. Migrating an old spec: replace the raw `evaluate` with the matching helper call. A spec that cannot be
+    expressed this way is a sign the video shows something the product does not.
 
 ## Known limits
 

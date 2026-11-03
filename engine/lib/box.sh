@@ -104,6 +104,11 @@ runstep() {
     # record shares the app container's network namespace: an app that sets Secure cookies only works on https or
     # http://localhost in Chromium, never on http://<container>:<port>
     record) shift; cmd="npx playwright test $*"
+      # a DOM edit must go through s.rewrite / s.mask (logged); a raw one fails here, before a minute of filming, and in the gate
+      if ! python3 "$ENGINE/lib/specscan.py" "$HERE/$video" >&2; then
+        if [ "${DEMO_DRY:-}" = 1 ]; then echo "[drift] the spec has raw DOM edits (above); the gate would fail them" >&2
+        else echo "record refused: the spec has raw DOM edits" >&2; return 1; fi
+      fi
       if [ -n "$APPC" ]; then netarg="--network container:$APPC"; base="http://localhost:$(pj app.port)"; fi
       extra="$(python3 - "$video" <<'PY'
 import json, shlex, sys

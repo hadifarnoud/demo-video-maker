@@ -172,6 +172,53 @@ function secretFind(arg: { cfg: SecretCfg; allow: string[]; masked: string[]; ex
   return out;
 }
 
+/** Runs in the page: rewrite a property (`value`, `text` or an attribute) of every element matching `selector`, and keep doing it
+ *  (a later React render must not bring the old text back). `from` is replaced by `to` inside the current text; without `from` the
+ *  whole value becomes `to`. `$ORIGIN` in `from` is the page's origin. Self-contained. */
+function domRewrite(arg: { selector: string; prop: string; from: string | null; to: string }): { matched: number; changed: number; before: string } {
+  const from = arg.from === null ? null : arg.from.replace('$ORIGIN', location.origin);
+  const apply = () => {
+    let changed = 0, before = '';
+    const els = Array.from(document.querySelectorAll(arg.selector));
+    for (const el of els) {
+      const cur = arg.prop === 'value' ? (el as HTMLInputElement).value : arg.prop === 'text' ? el.textContent ?? '' : el.getAttribute(arg.prop) ?? '';
+      const nxt = from === null ? arg.to : cur.split(from).join(arg.to);
+      if (nxt === cur) continue;
+      changed++;
+      before = before || (from ?? cur);
+      if (arg.prop === 'value') Object.getOwnPropertyDescriptor(Object.getPrototypeOf(el), 'value')!.set!.call(el, nxt); // React's own setter is bypassed on purpose: the page must not see an input event
+      else if (arg.prop === 'text') el.textContent = nxt;
+      else el.setAttribute(arg.prop, nxt);
+    }
+    return { matched: els.length, changed, before };
+  };
+  const first = apply();
+  setInterval(apply, 20);
+  return first;
+}
+
+/** Runs in the page: a blur plate over the first element matching `selector` (only the part after the text `after` when given). */
+function domMask(arg: { selector: string; after: string | null; id: string }): number {
+  const plate = document.createElement('div');
+  plate.id = arg.id;
+  document.body.appendChild(plate);
+  const place = () => {
+    const el = document.querySelector(arg.selector);
+    if (!el) return;
+    const r = el.getBoundingClientRect(), cs = getComputedStyle(el);
+    let x0 = r.left + 1;
+    if (arg.after !== null) {
+      const ctx = document.createElement('canvas').getContext('2d')!;
+      ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      x0 = r.left + parseFloat(cs.paddingLeft) + ctx.measureText(arg.after).width + 2;
+    }
+    Object.assign(plate.style, { position: 'fixed', left: x0 + 'px', top: r.top + 1 + 'px', width: Math.max(0, r.right - x0 - 1) + 'px', height: r.height - 2 + 'px', zIndex: '2147483000', pointerEvents: 'none', backdropFilter: 'blur(9px)', background: 'rgba(240,243,247,0.72)', borderRadius: '4px' });
+  };
+  place();
+  setInterval(place, 20);
+  return document.querySelectorAll(arg.selector).length;
+}
+
 export class Scene {
   readonly page: Page;
   readonly n: number;
@@ -192,6 +239,7 @@ export class Scene {
   private late: { kind: string; cue: string; by: number }[] = [];
   private checked = new Set<string>();
   private preflightLog: { when: string; ok: boolean; problems: string[] }[] = [];
+  private domEdits: { t: number; kind: string; selector: string; prop?: string; before?: string; after?: string; why: string }[] = [];
   private secretAllow: { pattern: string; why: string }[] = [];
   private maskedSelectors: string[] = [];
   private scans = 0;
@@ -464,6 +512,34 @@ export class Scene {
     await this.scanSecrets('scroll');
   }
 
+
+  /** The one way a spec may change what the page shows. Rewrites `prop` (`value`, `text` or an attribute) of the elements matching
+   *  `selector`: `from` -> `to` inside the current text, or the whole value -> `to` without `from`. The edit and its reason are
+   *  logged to `dom_edits` and listed by the gate; a raw page.evaluate/route/addInitScript in a spec fails the gate. */
+  async rewrite(selector: string, o: { prop?: string; from?: string; to: string; why: string }) {
+    if (!o.why?.trim()) throw new Error(`scene ${this.n}: rewrite(${selector}) needs a why`);
+    await this.page.locator(selector).first().waitFor({ state: 'attached', timeout: 8000 });
+    const prop = o.prop ?? 'text';
+    const r = await this.page.evaluate(domRewrite, { selector, prop, from: o.from ?? null, to: o.to });
+    if (r.changed === 0) {
+      const m = `scene ${this.n}: rewrite(${selector}) changed nothing (${r.matched} match${r.matched === 1 ? '' : 'es'}); the app no longer renders "${o.from ?? '(value)'}" there`;
+      if (DRY) { console.log(`[drift] ${m}`); return; }
+      throw new Error(m);
+    }
+    const tok = (x: string) => x.length > 60 ? x.slice(0, 40) + '…' : x.replace(/[A-Za-z0-9_+=-]{16,}/g, '…'); // a log must not carry the secret it hides
+    this.domEdits.push({ t: +this.now().toFixed(3), kind: 'rewrite', selector, prop, before: tok(r.before), after: tok(o.to), why: o.why });
+  }
+
+  /** A blur plate over an element (only the part after the text `after`, when given). Logged like rewrite(); the secret scan
+   *  skips what the plate covers. */
+  async mask(selector: string, o: { after?: string; why: string }) {
+    if (!o.why?.trim()) throw new Error(`scene ${this.n}: mask(${selector}) needs a why`);
+    await this.page.locator(selector).first().waitFor({ state: 'attached', timeout: 8000 });
+    await this.page.evaluate(domMask, { selector, after: o.after ?? null, id: `__dvm_mask_${this.maskedSelectors.length}` });
+    this.maskedSelectors.push(selector);
+    this.domEdits.push({ t: +this.now().toFixed(3), kind: 'mask', selector, before: o.after, why: o.why });
+  }
+
   /** Assert an exact on-screen label is visible; recorded in clips/labels.json. A label the line names in «» is also logged
    *  as a `label` event with its box: the edit keeps subtitles off it and the gate compares the picture with and without subtitles. */
   async label(text: string, scope?: Target, at?: number) {
@@ -644,12 +720,12 @@ export class Scene {
     fs.writeFileSync(
       path.join(VDIR, 'clips', `scene-${nn}.json`),
       JSON.stringify({
-        log_version: 3, scene: this.n, voiceAt: this.voiceAt, voiceDuration: this.voice?.duration ?? 0, duration: +endClip.toFixed(3),
+        log_version: 4, scene: this.n, voiceAt: this.voiceAt, voiceDuration: this.voice?.duration ?? 0, duration: +endClip.toFixed(3),
         fps: 30, size: [FRAME.w, FRAME.h], viewport: [VIEW.w, VIEW.h],
         capture: { frames: kept.length, span: +span.toFixed(3), avg_fps: +(kept.length / Math.max(span, 0.1)).toFixed(1) },
         cuts: this.cuts, events: this.events, path: this.pathLog, presses: this.presses, late: this.late,
         voice_sig: this.voice?.sig, unchecked_labels: unchecked, preflight: this.preflightLog, fonts: this.fonts,
-        secrets: { scans: this.scans, allow: this.secretAllow },
+        secrets: { scans: this.scans, allow: this.secretAllow }, dom_edits: this.domEdits,
       }),
     );
     fs.rmSync(this.framesDir, { recursive: true, force: true });

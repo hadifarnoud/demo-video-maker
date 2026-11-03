@@ -19,7 +19,7 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "lib"))
 
 LABEL_RE = re.compile(r"«([^»]+)»")
-LOG_VERSION = 3  # clip log format written by lib/record/demo.ts; an older log lacks checks the gate relies on
+LOG_VERSION = 4  # clip log format written by lib/record/demo.ts; an older log lacks checks the gate relies on
 
 
 def norm(s):
@@ -153,6 +153,13 @@ def main():
         leaks += [dict(file="clips/secret-hits.json", where=f"scene {n}: {x['field']}", kind=x["kind"]) for x in h["hits"]]
     scans = sum(log.get("secrets", {}).get("scans", 0) for log in clips.values())
     add("no secret on screen or in the logs", not leaks, leaks or dict(recorder_scans=scans, allowed=[a["why"] for a in (cfg.get("secrets") or {}).get("allow", [])]))
+
+    # DOM edits: only the logged helpers (s.rewrite, s.mask) may change what the page shows
+    import specscan
+
+    raw = [f"{f}:{no} {rule}: {snip}" for f, no, rule, snip in specscan.scan(vdir)]
+    declared = [dict(scene=log["scene"], **{k: v for k, v in d.items() if k != "t"}) for log in clips.values() for d in log.get("dom_edits", [])]
+    add("DOM edits are declared (s.rewrite / s.mask) and listed", not raw, dict(raw_edits=raw) if raw else dict(declared_edits=declared or "none"))
 
     # 7. red-state scan of the final picture
     if nosubs_mp4.exists():
