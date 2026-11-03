@@ -229,7 +229,20 @@ case "$1" in
     # --shots: one PNG per click/hover/look/type/named label with its box drawn, in $MEDIA/<video>/drift-shots/ (nothing is filmed or paid for)
     if [ "${1:-}" = --shots ]; then export DEMO_SHOTS=1; fi
     sync_all; app; rc=0
-    DEMO_DRY=1 SCENE_TIMEOUT_MS="${SCENE_TIMEOUT_MS:-60000}" runstep "$v" record || rc=$?
+    # the sandboxes a real recording uses: a scene in record_groups must not see another scene's writes
+    for b in $(python3 - "$v" <<'PY'
+import json, sys
+v = sys.argv[1]
+groups = json.load(open(v + "/video.json")).get("record_groups", [])
+grouped = {n for g in groups for n in g}
+n = sum(1 for l in open(v + "/narration.txt") if l.strip())
+rest = [i for i in range(1, n + 1) if i not in grouped]
+for g in ([rest] if rest else []) + groups:
+    print(",".join(map(str, g)))
+PY
+    ); do
+      SCENES="$b" DEMO_DRY=1 SCENE_TIMEOUT_MS="${SCENE_TIMEOUT_MS:-60000}" runstep "$v" record || rc=$?
+    done
     if [ "${DEMO_SHOTS:-}" = 1 ]; then
       mkdir -p "$MEDIA/$v/drift-shots"
       retry rsync -a --delete "$BOX:$REMOTE/$v/drift-shots/" "$MEDIA/$v/drift-shots/" && echo "shots in $MEDIA/$v/drift-shots"
