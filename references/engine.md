@@ -63,7 +63,7 @@ a Playwright `Locator` or a `{x, y, width, height}` box (CSS px, 1280x720 viewpo
 | `callout(label, hint, cue + {hold, scope})` | lower third with the exact label and a short hint (also asserts the label) |
 | `type(target, text, cue + {delay})` | click the field at the cue, then type char by char. Password-like targets are not logged |
 | `scrollTo(target, cue)` | smooth scroll, ends at the cue |
-| `label(text, scope?)` | assert an exact label is visible; writes `clips/labels.json`. `«Label»` cues call it for you |
+| `label(text, scope?)` | assert an exact label is visible; writes `clips/labels.json` and, when the line names it in «», logs its box as an overlap target. `«Label»` cues call it for you |
 | `cutStart()` / `cutEnd()` | cut slow saves and page loads out of the clip (clip time skips the cut) |
 | `finish()` | hold until the line ends + 0.6 s, final pre-flight, encode `clips/scene-NN.mp4`. Called for you if omitted |
 
@@ -100,7 +100,7 @@ colour); `max_seconds`; `gate` (`stt_min`, `lufs_tol`, `max_pan`, `max_zoom_rate
 ## Gate (`lib/gate.py`)
 
 Automated: output shape (1920x1080, 30 fps, audio), duration limit, every `«label»` of the narration was found on screen,
-no late cue, pre-flight clean, steady capture rate, red-state scan, camera speed, subtitles never cover an action,
+no late cue, pre-flight clean, steady capture rate, red-state scan, camera speed, subtitles never cover an action or a named label (geometry and a pixel diff),
 music covers the video, loudness -16 LUFS +-1, STT of the final mix vs `narration.txt`. Writes `out/<name>.gate.json` and
 `out/<name>.contact.jpg` (1 frame / 1.5 s). Still manual: an independent reviewer looks at the contact sheet and
 transcript, including the zoom moves and the subtitle placement.
@@ -202,6 +202,14 @@ Found while listening to 01-tour-fa:
 36. **Drift check (idea from `aidemo`'s CI replay).** A merged app moved 78 commits past the Praxabase videos without anyone noticing. `box.sh drift` runs the spec with the clock, capture and clip logs off.
 37. **Capture allowance.** `video.json` `gate.capture_allow` (`{"8": {"min": 15, "why": "..."}}`) lowers the floor for one named scene with a stated reason, when an idle box still cannot reach it and the scene is mostly static. Load on the box is the usual cause, so re-record first.
 38. **Media outside the repo.** Removing a worktree no longer deletes the only copy of a finished video, and the repo carries sources only.
+
+Found while comparing with similar tools (2026-11):
+39. **A narrated label is an overlap target.** The old check only boxed logged clicks, hovers, looks and typing, so a subtitle could sit
+    on a label the line names and still pass. `label()` now logs a `label` event with the label's box (the tightest visible match) for
+    each `«label»` the line names; `edit.py` keeps subtitles off it (it is not a camera target) and writes `label_rects` to
+    `edit.json`. The gate then compares the picture with and without subtitles inside each box (`gate.label_cover_frac`, default
+    0.02 of the pixels) and fails a subtitle that covers it. That check does not use the edit's geometry, so a bug in it cannot hide a
+    cover. Clip logs carry `log_version: 2`; the gate fails an older log, so re-record it (no voice spend).
 
 ## Known limits
 

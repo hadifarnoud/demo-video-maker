@@ -28,7 +28,7 @@ const DRY = process.env.DEMO_DRY === '1'; // drift check: run every step and lab
 export type Cue = { on?: string; nth?: number; at?: 'start' | 'end' | number };
 export type Box = { x: number; y: number; width: number; height: number };
 type Target = string | Locator | Box;
-type Ev = { t: number; kind: string; box?: Box; label?: string; hint?: string; text?: string; wide?: boolean; hold?: number; cue?: string };
+type Ev = { t: number; kind: string; box?: Box; label?: string; hint?: string; text?: string; wide?: boolean; hold?: number; cue?: string; narrated?: boolean; spoken_t?: number };
 
 type VoiceLog = { sig?: string; text: string; starts: number[]; ends: number[]; duration: number; line: string };
 
@@ -68,21 +68,41 @@ function findPhrase(text: string, phrase: string, nth = 0): [number, number] | n
   return [map[idx], map[idx + want.length - 1]];
 }
 
-/** Runs in the page: is an element (the scope root included) whose whole text matches visible in the viewport? Self-contained. */
-function labelFind(arg: { root: Element | null; src: string }): boolean {
+type Rect = { x: number; y: number; width: number; height: number };
+
+/** Runs in the page: the box (viewport CSS px) of the tightest visible element (the scope root included) whose whole text
+ *  matches, or null. A badge `Only holder<bdi>Name</bdi>` matches on its own text nodes and gets the box of those nodes. Self-contained. */
+function labelFind(arg: { root: Element | null; src: string }): Rect | null {
   const re = new RegExp(arg.src);
   const base: Element = arg.root ?? document.body;
   const vw = window.innerWidth, vh = window.innerHeight;
-  const cand = [base, ...Array.from(base.querySelectorAll('*'))];
-  return cand.some((e) => {
+  const norm = (x: string) => x.replace(/\s+/g, ' ').trim();
+  let best: Rect | null = null;
+  for (const e of [base, ...Array.from(base.querySelectorAll('*'))]) {
     const r = e.getBoundingClientRect();
-    if (r.width <= 0 || r.height <= 0 || r.bottom < 0 || r.top > vh || r.right < 0 || r.left > vw) return false;
+    if (r.width <= 0 || r.height <= 0 || r.bottom < 0 || r.top > vh || r.right < 0 || r.left > vw) continue;
     const cs = getComputedStyle(e);
-    if (cs.visibility === 'hidden' || cs.display === 'none') return false;
-    const own = Array.from(e.childNodes).filter((n) => n.nodeType === 3).map((n) => n.textContent ?? '').join(' '); // "Only holder<bdi>Name</bdi>"
-    const norm = (x: string) => x.replace(/\s+/g, ' ').trim();
-    return re.test(norm(e.textContent ?? '')) || re.test(norm(own));
-  });
+    if (cs.visibility === 'hidden' || cs.display === 'none') continue;
+    const nodes = Array.from(e.childNodes).filter((n) => n.nodeType === 3);
+    let box: Rect | null = null;
+    if (re.test(norm(e.textContent ?? ''))) box = { x: r.x, y: r.y, width: r.width, height: r.height };
+    else if (re.test(norm(nodes.map((n) => n.textContent ?? '').join(' ')))) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (const n of nodes) {
+        if (!(n.textContent ?? '').trim()) continue;
+        const rg = document.createRange();
+        rg.selectNodeContents(n);
+        for (const q of Array.from(rg.getClientRects())) { x0 = Math.min(x0, q.left); y0 = Math.min(y0, q.top); x1 = Math.max(x1, q.right); y1 = Math.max(y1, q.bottom); }
+      }
+      if (x1 > x0 && y1 > y0) box = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+    }
+    if (!box) continue;
+    const cx0 = Math.max(0, box.x), cy0 = Math.max(0, box.y), cx1 = Math.min(vw, box.x + box.width), cy1 = Math.min(vh, box.y + box.height);
+    if (cx1 <= cx0 || cy1 <= cy0) continue;
+    const c = { x: cx0, y: cy0, width: cx1 - cx0, height: cy1 - cy0 };
+    if (!best || c.width * c.height < best.width * best.height) best = c;
+  }
+  return best;
 }
 
 export class Scene {
@@ -310,7 +330,7 @@ export class Scene {
   /** Lower-third in the edit: exact label + short hint, shown from the cue for `hold` seconds. */
   async callout(label: string, hint: string, cue: Cue & { hold?: number; scope?: Target } = {}) {
     const cueT = this.cueTime(cue);
-    await this.label(label, cue.scope);
+    await this.label(label, cue.scope, cueT ?? undefined);
     if (cueT !== null) await this.until(cueT);
     await this.autoLabels();
     const tl = this.now();
@@ -356,19 +376,21 @@ export class Scene {
     await this.autoLabels();
   }
 
-  /** Assert an exact on-screen label is visible; recorded in clips/labels.json. */
-  async label(text: string, scope?: Target) {
+  /** Assert an exact on-screen label is visible; recorded in clips/labels.json. A label the line names in «» is also logged
+   *  as a `label` event with its box: the edit keeps subtitles off it and the gate compares the picture with and without subtitles. */
+  async label(text: string, scope?: Target, at?: number) {
     // One DOM walk (Playwright's getByText over a big page takes 0.3 s and made the next cue late).
     // Whole-text match; curly, straight or Persian quotes around a quoted line (“…”, «…») and curly apostrophes are tolerated.
     const esc = text.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/['’]/g, "['’]").replace(/\s+/g, '\\s+');
     const src = `^\\s*["“”«]?${esc}["“”»]?\\s*$`;
-    let found: boolean;
-    if (scope === undefined) found = await this.page.evaluate(labelFind, { root: null, src });
+    let box: Rect | null;
+    if (scope === undefined) box = await this.page.evaluate(labelFind, { root: null, src });
     else {
       const sl = typeof scope === 'string' ? this.page.locator(scope).first() : (scope as Locator).first();
       const h = await sl.elementHandle();
-      found = h ? await this.page.evaluate(labelFind, { root: h, src }) : false;
+      box = h ? await this.page.evaluate(labelFind, { root: h, src }) : null;
     }
+    const found = box !== null;
     this.checked.add(norm(text));
     if (DRY) {
       if (!found) console.log(`[drift] scene ${this.n}: label "${text}" is not on screen`);
@@ -379,6 +401,11 @@ export class Scene {
     all[`scene-${this.n}: ${text}`] = { scene: this.n, label: text, found };
     fs.writeFileSync(f, JSON.stringify(all, null, 1));
     if (!found) throw new Error(`scene ${this.n}: label "${text}" is not visible on screen`);
+    if (this.recording && this.cutOpen === null && box) {
+      const named = [...(this.voice?.line ?? '').matchAll(/«([^»]+)»/g)].some((m) => norm(m[1]) === norm(text));
+      const hit = this.voice ? findPhrase(this.voice.text, text, 0) : null;
+      this.events.push({ t: +(at ?? this.now()).toFixed(3), kind: 'label', label: text, box, narrated: named, spoken_t: hit ? +(this.voiceAt + this.voice!.starts[hit[0]]).toFixed(3) : undefined });
+    }
   }
 
   cutStart() {
@@ -503,7 +530,7 @@ export class Scene {
     fs.writeFileSync(
       path.join(VDIR, 'clips', `scene-${nn}.json`),
       JSON.stringify({
-        scene: this.n, voiceAt: this.voiceAt, voiceDuration: this.voice?.duration ?? 0, duration: +endClip.toFixed(3),
+        log_version: 2, scene: this.n, voiceAt: this.voiceAt, voiceDuration: this.voice?.duration ?? 0, duration: +endClip.toFixed(3),
         fps: 30, size: [FRAME.w, FRAME.h], viewport: [VIEW.w, VIEW.h],
         capture: { frames: kept.length, span: +span.toFixed(3), avg_fps: +(kept.length / Math.max(span, 0.1)).toFixed(1) },
         cuts: this.cuts, events: this.events, path: this.pathLog, presses: this.presses, late: this.late,

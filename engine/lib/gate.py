@@ -35,6 +35,37 @@ def probe(path):
     return json.loads(out)
 
 
+def label_cover(nosubs, subs, rects, max_frac, thresh=40):
+    """Ground truth, independent of the edit's geometry: for every named label, compare its box in the picture with and without
+    subtitles. -> (boxes checked, [labels whose box differs in more than max_frac of its pixels])."""
+    import cv2
+
+    want = {}  # frame index -> [(label index, rect)]
+    for i, lr in enumerate(rects):
+        for smp in lr["samples"]:
+            want.setdefault(int(round(smp["t"] * 30)), []).append((i, smp["rect"], smp["t"]))
+    if not want:
+        return 0, []
+    a, b = cv2.VideoCapture(str(nosubs)), cv2.VideoCapture(str(subs))
+    worst, idx, checked = {}, 0, 0
+    while idx <= max(want):
+        if not (a.grab() and b.grab()):
+            break
+        if idx in want:
+            fa, fb = cv2.cvtColor(a.retrieve()[1], cv2.COLOR_BGR2GRAY), cv2.cvtColor(b.retrieve()[1], cv2.COLOR_BGR2GRAY)
+            for i, (x0, y0, x1, y1), t in want[idx]:
+                x0, y0, x1, y1 = max(0, x0), max(0, y0), min(fa.shape[1], x1), min(fa.shape[0], y1)
+                if x1 <= x0 or y1 <= y0:
+                    continue
+                checked += 1
+                frac = float((cv2.absdiff(fa[y0:y1, x0:x1], fb[y0:y1, x0:x1]) > thresh).mean())
+                if frac > worst.get(i, (0, 0))[0]:
+                    worst[i] = (frac, t)
+        idx += 1
+    bad = [dict(scene=rects[i]["scene"], label=rects[i]["label"], t=t, covered=round(f, 3)) for i, (f, t) in sorted(worst.items()) if f > max_frac]
+    return checked, bad
+
+
 def main():
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     if not args:
@@ -125,6 +156,13 @@ def main():
         worst_z = max((z["max_zoom_log_per_s"] for z in zs.values()), default=0)
         add("camera moves are smooth", worst_pan <= gcfg.get("max_pan", 900) and worst_z <= gcfg.get("max_zoom_rate", 0.9), dict(pan_css_px_per_s=worst_pan, zoom_log_per_s=worst_z))
         add("subtitles never cover the action", not edit["subtitle_overlaps"], edit["subtitle_overlaps"] or "ok")
+        old = sorted(n for n, l in clips.items() if l.get("log_version", 1) < 2)
+        add("clip logs record named labels", not old, dict(re_record=old) if old else "ok")
+        if "label_rects" not in edit:
+            add("named labels not covered by a subtitle (pixel diff)", False, "edit.json predates label boxes: run edit again")
+        elif subs_mp4.exists() and nosubs_mp4.exists() and edit.get("size") == [1920, 1080]:
+            n_box, covered = label_cover(nosubs_mp4, subs_mp4, edit["label_rects"], gcfg.get("label_cover_frac", 0.02))
+            add("named labels not covered by a subtitle (pixel diff)", not covered, dict(boxes_checked=n_box, covered=covered) if covered else f"{n_box} boxes, none covered")
         m = edit["audio"].get("music")
         if m:
             add("music bed covers the video", not m["shorter_than_video"], m)

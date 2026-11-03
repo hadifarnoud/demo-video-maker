@@ -371,8 +371,22 @@ def main():
     sub_pos = {}
     ev_rects = {}  # item id -> [(t, kind, out rect)] used for overlap and callout placement
 
-    def event_rect(it, e):
-        win = cam_window(*cam_at(it["K"], e["t"]), OUT_W)
+    # A label the line names is a target too (not a camera target). A label asserted before the voice says it is judged at the
+    # moment of speaking, unless the page scrolled or changed in between.
+    for it in items:
+        if it["kind"] != "scene":
+            continue
+        moved = [e["t"] for e in it["log"]["events"] if e["kind"] in ("scroll", "click")]
+        for e in it["log"]["events"]:
+            if e["kind"] == "label":
+                sp = e.get("spoken_t")
+                e["te"] = sp if e.get("narrated") and sp and sp > e["t"] and not any(e["t"] < m <= sp for m in moved) else e["t"]
+
+    def named_label(e):
+        return e["kind"] != "label" or e.get("narrated")
+
+    def event_rect(it, e, t=None):
+        win = cam_window(*cam_at(it["K"], e["t"] if t is None else t), OUT_W)
         b = e["box"]
         x0, y0 = css_to_out(b["x"], b["y"], win)
         x1, y1 = css_to_out(b["x"] + b["width"], b["y"] + b["height"], win)
@@ -380,7 +394,7 @@ def main():
 
     for it in items:
         if it["kind"] == "scene":
-            ev_rects[it["id"]] = [(e["t"], e["kind"], event_rect(it, e)) for e in it["log"]["events"] if e.get("box")]
+            ev_rects[it["id"]] = [(e.get("te", e["t"]), e["kind"], event_rect(it, e, e.get("te", e["t"]))) for e in it["log"]["events"] if e.get("box") and named_label(e)]
 
     top_margin = cfg.get("subtitle_top_margin", {})  # per scene: keeps a top subtitle below a site nav bar
 
@@ -414,6 +428,26 @@ def main():
     for s in subs:
         s["pos"] = sub_pos[s["item"]][0]
         s["rect"] = sub_rect(s, s["pos"])
+
+    # -- named labels: where each one sits in the final picture (1920x1080 px), for the gate's pixel check
+    label_rects = []
+    for j, it in enumerate(items):
+        if it["kind"] != "scene":
+            continue
+        lo = it["start"] + (XF if j else 0.0)  # inside a crossfade the picture is a blend: no stable box
+        hi = items[j + 1]["start"] if j + 1 < len(items) else it["start"] + it["keep"]
+        for e in it["log"]["events"]:
+            if e["kind"] != "label" or not e.get("narrated"):
+                continue
+            samples = []
+            for d in (0.0, 0.3):
+                ct = e.get("te", e["t"]) + d
+                if not lo <= it["start"] + ct < hi:
+                    continue
+                x0, y0, x1, y1 = (v / K_SCALE for v in event_rect(it, e, ct))
+                samples.append(dict(t=round(it["start"] + ct, 3), rect=[round(x0), round(y0), round(x1), round(y1)]))
+            if samples:
+                label_rects.append(dict(scene=it["n"], label=e["label"], samples=samples))
 
     # -- callout placement: emptiest candidate corner, away from the action and the subtitles
     def place_callouts(it):
@@ -451,7 +485,7 @@ def main():
     callout_sprites = {cid: sprite(ov / "callouts" / f"{cid}.png") for cid in index["callouts"]}
 
     if plan_only:  # decisions only (subtitle positions, overlaps, zoom): no frames, no audio
-        plan = dict(total=round(total, 3), subtitle_pos={k: v[0] for k, v in sub_pos.items()}, subtitle_overlaps={k: v[1] for k, v in sub_pos.items() if v[1]},
+        plan = dict(total=round(total, 3), subtitle_pos={k: v[0] for k, v in sub_pos.items()}, subtitle_overlaps={k: v[1] for k, v in sub_pos.items() if v[1]}, label_rects=label_rects,
                     zoom={i["id"]: [(round(g["t0"], 2), round(g["z"], 2)) for g in i["groups"]] for i in items if i["kind"] == "scene"})
         (vdir / "out" / f"{name}.plan.json").write_text(json.dumps(plan, indent=1))
         print(json.dumps({k: plan[k] for k in ("total", "subtitle_pos", "subtitle_overlaps")}))
@@ -637,6 +671,7 @@ def main():
         subtitles=[dict(id=s["id"], item=s["item"], t0=round(s["t0"], 2), t1=round(s["t1"], 2), pos=s["pos"], rect=[int(v) for v in s["rect"]], text="".join(p["s"] for p in s["parts"])) for s in subs],
         subtitle_overlaps={k: v[1] for k, v in sub_pos.items() if v[1]},
         subtitle_pos={k: v[0] for k, v in sub_pos.items()},
+        label_rects=label_rects,
         callouts={i["id"]: i["callouts_placed"] for i in items if i["kind"] == "scene" and i["callouts_placed"]},
         audio=dict(measured=meas, music=music_info), outputs=outs,
     )
