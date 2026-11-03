@@ -731,7 +731,7 @@ def main():
     # chapters (one per item) in both files; the text as SRT/VTT beside them and as a soft track (off by default) in the clean file
     def chapter_title(it):
         if it["kind"] == "scene":
-            return it["log"].get("title") or f"Scene {it['n']}"
+            return cfg.get("chapters", {}).get(str(it["n"])) or it["log"].get("title") or f"Scene {it['n']}"
         if it["id"] in ("intro", "outro"):
             return cards_cfg.get(it["id"], {}).get("title") or it["id"].capitalize()
         return it["cfg"].get("title") or f"Scene {it['n']}"
