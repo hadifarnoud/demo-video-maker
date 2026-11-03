@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-PRIORITY = {"peak": 3, "click": 3, "callout": 2, "boundary": 2, "start": 1, "end": 1, "fill": 0}
+PRIORITY = {"peak": 3, "click": 3, "callout": 2, "boundary": 2, "start": 4, "end": 4, "fill": 0}
 MIN_GAP = 0.9  # s between two frames
 HOLD_AFTER = 0.4  # edit.py build_camera: the camera holds this long after the last target of a group
 
