@@ -678,7 +678,7 @@ def main():
                 sys.exit("ffmpeg video encode failed")
 
     # -- audio: voice lines at their clip's voice start, music ducked under the voice
-    n_samp = int(math.ceil((total + 0.5) * SR))
+    n_samp = int(math.ceil(total * SR))  # audio ends with the picture
     voice = np.zeros(n_samp, np.float32)
     vad = []
     for it in items:
