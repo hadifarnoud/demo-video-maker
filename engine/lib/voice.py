@@ -110,6 +110,9 @@ def _int_words(n: int, fa: bool = False) -> str:
         return tens[t] + ((" و " if fa else " ") + ones[r] if r else "")
     if n == 100:
         return "صد" if fa else "one hundred"
+    if n < 1000 and not fa:
+        h, r = divmod(n, 100)
+        return f"{ones[h]} hundred" + (f" {_int_words(r)}" if r else "")
     return str(n)  # out of range: keep the digits
 
 
