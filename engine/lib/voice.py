@@ -336,10 +336,11 @@ def check_take(spoken, transcript, must_hear=()):
     """-> (score 0..1, ratio, missing). Score = text similarity minus a penalty per miss. `must_hear` (video.json
     voice.must_hear, e.g. ["Praxabase"]): brand words that appear in the line and must be heard as spelled
     (a space inside the word is accepted: "Praxa base")."""
-    heard = norm(transcript)
+    # digits -> words on both sides: STT writes numbers out, and a digit mismatch must not cost extra takes
+    heard = norm(norm_words(transcript))
     missing = [l for l in LABEL_RE.findall(spoken) if not label_heard(l, transcript)]
     missing += [w for w in must_hear if w.lower() in spoken.lower() and norm(w) not in heard]
-    want = norm(LABEL_RE.sub(lambda m: m.group(1), spoken))
+    want = norm(norm_words(LABEL_RE.sub(lambda m: m.group(1), spoken)))
     ratio = difflib.SequenceMatcher(None, want, heard, autojunk=False).ratio()
     return ratio - 0.2 * len(missing), ratio, missing
 
